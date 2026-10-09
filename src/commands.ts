@@ -15,6 +15,13 @@ import { escapeHtml, shortPath } from './render.ts'
 import { setLocale, t } from './locale.ts'
 import { safe } from './log.ts'
 
+/** Resolution of a session lookup: its live agent, or why it is unavailable. */
+export interface ResolvedAgent {
+  agent?: Agent
+  /** Localized reason the session cannot be driven (foreign profile, nothing found). */
+  refusal?: string
+}
+
 /** What the command handlers need from the bridge. */
 export interface CommandDeps {
   ctx: Context
@@ -22,8 +29,8 @@ export interface CommandDeps {
   state: BridgeState
   telegram: Telegram
   chatId: number
-  /** Live agent for a session, resuming the persisted one when needed. */
-  resolveAgent: (sessionId: string) => Promise<Agent | undefined>
+  /** Live agent for a session, resumed from persistence when needed; refuses foreign live profiles. */
+  resolveAgent: (sessionId: string) => Promise<ResolvedAgent>
   /** Create a fresh session in a directory; returns its id. */
   createSession: (cwd: string) => Promise<string>
   /** The directory /new uses when the argument is absent. */
@@ -121,8 +128,8 @@ export async function handleCommand(
             lines.push(t('models_route', { provider: escapeHtml(provider.id), model: escapeHtml(model.id) }))
           }
         }
-        const agent = targetSession !== undefined ? await deps.resolveAgent(targetSession) : undefined
-        const header = agent?.session.requestHeader()
+        const resolved = targetSession !== undefined ? await deps.resolveAgent(targetSession) : undefined
+        const header = resolved?.agent?.session.requestHeader()
         if (header !== undefined) {
           lines.push(t('models_current', {
             provider: escapeHtml(header.config.provider),
@@ -155,11 +162,11 @@ export async function handleCommand(
         }))
       }
       try {
-        const agent = await deps.resolveAgent(id)
+        const resolved = await deps.resolveAgent(id)
         const meter = ctx.get('tokenMeter') as { measure: (session: unknown) => { totalTokens: number } } | undefined
-        const window = agent?.session.requestContext()?.contextWindow
-        if (agent !== undefined && meter !== undefined) {
-          const used = meter.measure(agent.session).totalTokens
+        const window = resolved.agent?.session.requestContext()?.contextWindow
+        if (resolved.agent !== undefined && meter !== undefined) {
+          const used = meter.measure(resolved.agent.session).totalTokens
           if (window !== undefined) parts.push(t('usage_ctx', { used, size: window }))
         }
       } catch {
@@ -172,10 +179,10 @@ export async function handleCommand(
     case 'queue': {
       const id = targetSession
       if (id === undefined) return t('msg_no_target')
-      const agent = await deps.resolveAgent(id)
-      if (agent === undefined) return t('queue_none')
-      const nextTurn = agent.inbox.nextTurn.length
-      const nextStep = agent.inbox.nextStep.length
+      const resolved = await deps.resolveAgent(id)
+      if (resolved.agent === undefined) return resolved.refusal ?? t('queue_none')
+      const nextTurn = resolved.agent.inbox.nextTurn.length
+      const nextStep = resolved.agent.inbox.nextStep.length
       if (nextTurn === 0 && nextStep === 0) return t('queue_none')
       const parts: string[] = [t('queue_header')]
       if (nextTurn > 0) parts.push(t('queue_turn', { n: nextTurn }))
@@ -209,11 +216,11 @@ export async function handleCommand(
     case 'history': {
       const id = targetSession
       if (id === undefined) return t('msg_no_target')
-      const agent = await deps.resolveAgent(id)
-      if (agent === undefined) return t('history_none')
+      const resolved = await deps.resolveAgent(id)
+      if (resolved.agent === undefined) return resolved.refusal ?? t('history_none')
       const wanted = Math.min(Math.max(Number(args.trim()) || 8, 1), 30)
       const entries: Array<{ role: 'user' | 'assistant', text: string }> = []
-      for (const event of agent.session.snapshotEvents()) {
+      for (const event of resolved.agent.session.snapshotEvents()) {
         if (event.type === 'user/message' && event.data.source.kind === 'user') {
           const text = event.data.content
             .filter((block): block is { type: 'text', text: string } => block.type === 'text')
@@ -261,9 +268,9 @@ export async function handleCommand(
     case 'kill': {
       const id = targetSession
       if (id === undefined) return t('msg_no_target')
-      const agent = await deps.resolveAgent(id)
-      if (agent === undefined) return t('kill_none')
-      agent.cancel({ kind: 'user' })
+      const resolved = await deps.resolveAgent(id)
+      if (resolved.agent === undefined) return resolved.refusal ?? t('kill_none')
+      resolved.agent.cancel({ kind: 'user' })
       return t('kill_done')
     }
 
@@ -308,8 +315,9 @@ interface Wizard {
 const wizards = new Map<string, Wizard>()
 
 async function listTasks(deps: CommandDeps, sessionId: string): Promise<string> {
-  const agent = await deps.resolveAgent(sessionId)
-  if (agent === undefined) return t('history_none')
+  const resolved = await deps.resolveAgent(sessionId)
+  if (resolved.agent === undefined) return resolved.refusal ?? t('history_none')
+  const agent = resolved.agent
   const schedule = await importSchedule()
   if (schedule === undefined) return t('tasks_unavailable')
   await deps.ctx.sessions.flush(agent.session)
@@ -411,8 +419,9 @@ function wizardSummary(wizard: Wizard): string {
  * durable `schedule/change` create, flush again.
  */
 async function createReminder(deps: CommandDeps, sessionId: string, wizard: Wizard): Promise<string> {
-  const agent = await deps.resolveAgent(sessionId)
-  if (agent === undefined) return t('history_none')
+  const resolved = await deps.resolveAgent(sessionId)
+  if (resolved.agent === undefined) return resolved.refusal ?? t('history_none')
+  const agent = resolved.agent
   const schedule = await importSchedule()
   if (schedule === undefined) return t('tasks_unavailable')
   try {

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
 import { assert, define, type Check } from './harness.ts'
-import { acquireLock, heartbeat, releaseLock } from '../src/ownership.ts'
+import { acquireLock, beatProfile, clearProfileBeat, heartbeat, isElsewhereLive, releaseLock } from '../src/ownership.ts'
 
 const scratch = mkdtempSync(join(tmpdir(), 'tg-bridge-lock-'))
 process.env.TG_LOCK_FILE = join(scratch, 'leader.lock')
@@ -61,5 +61,17 @@ export const ownershipChecks: Check[] = [
     assert(acquireLock(scratch), 'the released lock is free again')
     releaseLock(scratch)
     rmSync(scratch, { recursive: true, force: true })
+  }),
+
+  define('profile beats mark liveness for the routing guard', () => {
+    beatProfile(scratch, 'web')
+    assert(isElsewhereLive(scratch, 'web', 'desktop'), 'a fresh foreign profile is live')
+    assert(!isElsewhereLive(scratch, 'web', 'web'), 'the own profile is never foreign')
+    assert(!isElsewhereLive(scratch, 'tg-test', 'web'), 'an unannounced profile is not live')
+    assert(!isElsewhereLive(scratch, undefined, 'web'), 'an unclaimed session is never refused')
+    // A stale beat reads as gone: the session may be resumed elsewhere.
+    assert(!isElsewhereLive(scratch, 'web', 'desktop', Date.now() + 120_000), 'a stale beat is not live')
+    clearProfileBeat(scratch, 'web')
+    assert(!isElsewhereLive(scratch, 'web', 'desktop'), 'a cleared beat is not live')
   }),
 ]

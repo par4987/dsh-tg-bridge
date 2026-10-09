@@ -3,9 +3,11 @@
  * session the chat root points at, the last title learned for each session,
  * the interface language, and accumulated token usage.
  *
- * A small JSON file under `stateDir` owns all of it. Writes are synchronous
- * best-effort: correctness depends on the latest state, not on every
- * intermediate one — the same trade the Telegram offset persistence makes.
+ * Several profiles may load the bridge at once (web and desktop), so every
+ * access re-reads the file and every mutation persists immediately: writers
+ * merge per mutation instead of clobbering each other's whole epoch. A
+ * mapping records the profile that created the session, so an inbound prompt
+ * can refuse to wake a session another live process is already driving.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
@@ -24,6 +26,8 @@ export interface MappedSession {
   usage?: { inputTokens: number, outputTokens: number, totalTokens: number }
   /** Usage of the most recently committed assistant message. */
   lastUsage?: { inputTokens: number, outputTokens: number, totalTokens: number }
+  /** The profile whose process created and drives this session. */
+  profile?: string
 }
 
 interface StoredState {
@@ -43,35 +47,33 @@ export interface UsageDelta {
 }
 
 /**
- * The persisted mapping store. Every mutator persists synchronously; a write
+ * The persisted mapping store. Every access re-reads the state file, so
+ * concurrent bridge processes observe each other's mutations; a write
  * failure logs through the injected callback and never throws — a lost
  * persist costs a duplicate topic, not the bridge.
  */
 export class BridgeState {
-  private sessions = new Map<string, MappedSession>()
-  private rootTarget: string | undefined
-  private locale: 'es' | 'en' | undefined
-  private loaded = false
-
   constructor(
     private readonly file: string,
     private readonly onWarn: (message: string, detail?: unknown) => void = () => {},
   ) {}
 
+  /** Re-read the file: writers in other processes must not be clobbered. */
   private load(): void {
-    if (this.loaded) return
-    this.loaded = true
     try {
       const parsed = JSON.parse(readFileSync(this.file, 'utf-8')) as StoredState
-      for (const [id, mapping] of Object.entries(parsed.sessions ?? {})) {
-        if (mapping && typeof mapping === 'object') this.sessions.set(id, mapping)
-      }
-      if (parsed.rootTarget !== undefined) this.rootTarget = parsed.rootTarget
-      if (parsed.locale === 'es' || parsed.locale === 'en') this.locale = parsed.locale
+      this.sessions = new Map(Object.entries(parsed.sessions ?? {})
+        .filter(([, mapping]) => mapping !== null && typeof mapping === 'object'))
+      this.rootTarget = parsed.rootTarget
+      this.locale = parsed.locale === 'es' || parsed.locale === 'en' ? parsed.locale : undefined
     } catch {
       /* first run or a corrupt file — start empty */
     }
   }
+
+  private sessions = new Map<string, MappedSession>()
+  private rootTarget: string | undefined
+  private locale: 'es' | 'en' | undefined
 
   private persist(): void {
     try {
@@ -80,8 +82,8 @@ export class BridgeState {
       for (const [id, mapping] of this.sessions) sessions[id] = mapping
       const payload: StoredState = {
         sessions,
-        ...this.rootTarget === undefined ? {} : { rootTarget: this.rootTarget },
-        ...this.locale === undefined ? {} : { locale: this.locale },
+        ...(this.rootTarget === undefined ? {} : { rootTarget: this.rootTarget }),
+        ...(this.locale === undefined ? {} : { locale: this.locale }),
       }
       writeFileSync(this.file, JSON.stringify(payload, null, 2), 'utf-8')
     } catch (error) {
@@ -112,6 +114,24 @@ export class BridgeState {
     this.persist()
   }
 
+  /**
+   * Record which profile's process drives the session. Claimed before any
+   * prompt can reach it, so the poll owner can tell a foreign live session
+   * from one it is safe to resume.
+   */
+  claim(sessionId: string, profile: string): void {
+    const mapping = this.mapping(sessionId)
+    if (mapping.profile === profile) return
+    mapping.profile = profile
+    this.persist()
+  }
+
+  /** The profile that owns the session, when recorded. */
+  profileOf(sessionId: string): string | undefined {
+    this.load()
+    return this.sessions.get(sessionId)?.profile
+  }
+
   /** Forget a session entirely — its thread was deleted by hand. */
   remove(sessionId: string): void {
     this.load()
@@ -123,13 +143,15 @@ export class BridgeState {
   /** Forget a mapping by its thread id — the dead-thread healing path. */
   removeByThread(threadId: number): void {
     this.load()
+    let changed = false
     for (const [id, mapping] of this.sessions) {
       if (mapping.threadId === threadId) {
         this.sessions.delete(id)
         if (this.rootTarget === id) this.rootTarget = undefined
+        changed = true
       }
     }
-    this.persist()
+    if (changed) this.persist()
   }
 
   /** Known thread id for a session, if a topic was ever created. */
@@ -188,7 +210,10 @@ export class BridgeState {
 
   /** Record a real interaction moment. */
   touchIdle(sessionId: string, at = Date.now()): void {
-    this.mapping(sessionId).lastIdle = at
+    const mapping = this.mapping(sessionId)
+    if (mapping.lastIdle === at) return
+    mapping.lastIdle = at
+    this.persist()
   }
 
   /** Fold one committed assistant usage record into the session total. */
@@ -244,7 +269,7 @@ export class BridgeState {
     return [...this.sessions.entries()]
   }
 
-  /** How many mappings exist — the `/rebuild`-style reports read it. */
+  /** How many mappings exist. */
   size(): number {
     this.load()
     return this.sessions.size

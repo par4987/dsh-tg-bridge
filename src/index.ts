@@ -30,7 +30,7 @@ import type {} from '@deepseek-ai/dsh-user-approval'
 import type {} from '@deepseek-ai/dsh-user-questions'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import { createUserMessage, expandAssistantStream, type ContentBlock } from '@deepseek-ai/dsh-llm'
-import type { Agent, AgentHandle, AgentOptions, ModelSelection } from '@deepseek-ai/dsh-agent'
+import type { AgentHandle, AgentOptions, ModelSelection } from '@deepseek-ai/dsh-agent'
 import type { SessionId, Session } from '@deepseek-ai/dsh-session'
 import { AttachmentStore, type FileAttachmentRef, type SaveImageAttachment } from '@deepseek-ai/dsh-attachment'
 // Side-effect type import: declares ctx.sessionPersistence for the injected service.
@@ -42,8 +42,8 @@ import { Config, requireChatId, resolveToken } from './config.ts'
 import { BridgeState } from './state.ts'
 import { TurnRenderer } from './stream.ts'
 import { AnswererHub } from './answerers.ts'
-import { handleCommand, feedWizard, type CommandDeps } from './commands.ts'
-import { acquireLock, heartbeat, releaseLock, LOCK_INTERVAL_MS } from './ownership.ts'
+import { handleCommand, feedWizard, type CommandDeps, type ResolvedAgent } from './commands.ts'
+import { acquireLock, beatProfile, clearProfileBeat, heartbeat, isElsewhereLive, releaseLock, LOCK_INTERVAL_MS } from './ownership.ts'
 import { downloadsDir, decodeText, isTextLike, saveBinary, DOC_MAX_CHARS } from './ingest.ts'
 import { sttAvailable, transcribeFile } from './stt.ts'
 import { describeReplyTarget, extractFilePaths, isForumEcho, selectImages, withReplyContext, type ReplyLabels, type ReplyTarget } from './media-out.ts'
@@ -116,6 +116,12 @@ export function apply(ctx: Context, config: Config): void {
   setLocale(savedLocale)
   config.locale = savedLocale
 
+  /**
+   * The profile this process runs under — sessions get tagged with it so the
+   * poll owner can refuse to wake one another live profile is driving.
+   */
+  const myProfile = (ctx.get('profileContext') as { name?: string } | undefined)?.name ?? 'unknown'
+
   const workspace = config.workspace !== undefined ? resolve(config.workspace) : process.cwd()
 
   const telegram: Telegram = config.mode === 'dry'
@@ -161,29 +167,37 @@ export function apply(ctx: Context, config: Config): void {
 
   /**
    * The live Agent for a session: in-process when the host runs it, resumed
-   * from persistence when only the log exists. Subagent children stay
-   * untouchable — their runtime belongs to the parent.
+   * from persistence when only the log exists — and refused when another
+   * live profile owns it, so two processes never drive one session log.
+   * Subagent children stay untouchable; their runtime belongs to the parent.
    */
-  async function resolveAgent(sessionId: string): Promise<Agent | undefined> {
+  async function resolveAgent(sessionId: string): Promise<ResolvedAgent> {
     const id = brandString<SessionId>(sessionId)
     const live = ctx.agents.get(id)
-    if (live !== undefined) return live
+    if (live !== undefined) return { agent: live }
     const alreadyOwned = owned.get(sessionId)
-    if (alreadyOwned !== undefined) return alreadyOwned.agent
+    if (alreadyOwned !== undefined) return { agent: alreadyOwned.agent }
+    const sessionProfile = state.profileOf(sessionId)
+    if (isElsewhereLive(stateDir, sessionProfile, myProfile)) {
+      log('warn', `refusing to resume ${sessionId.slice(0, 12)}: profile ${sessionProfile} is live`)
+      return { refusal: t('session_elsewhere', { profile: sessionProfile ?? '?' }) }
+    }
     try {
       const stat = await ctx.sessionPersistence.stat(id)
-      if (stat === undefined) return undefined
-      if (stat.header.origin === 'subagent') return undefined
+      if (stat === undefined) return {}
+      if (stat.header.origin === 'subagent') return {}
       const handle = await ctx.agents.resume({
         resumeSessionId: id,
         agentOptions: defaultAgentOptions(),
       })
       owned.set(sessionId, handle)
       liveStatus.set(sessionId, 'idle')
-      return handle.agent
+      // The resuming profile now drives the session.
+      state.claim(sessionId, myProfile)
+      return { agent: handle.agent }
     } catch (error) {
       log('warn', `cannot resume session ${sessionId.slice(0, 12)}`, error)
-      return undefined
+      return {}
     }
   }
 
@@ -197,6 +211,7 @@ export function apply(ctx: Context, config: Config): void {
     })
     owned.set(sessionId, handle)
     liveStatus.set(sessionId, 'idle')
+    state.claim(sessionId, myProfile)
     state.touchIdle(sessionId)
     return sessionId
   }
@@ -338,6 +353,8 @@ export function apply(ctx: Context, config: Config): void {
     if (session.header.origin === 'subagent') return
     if (config.mirror !== 'all') return
     if (state.isArchived(id)) return
+    // This profile's process drives the session from its first event.
+    state.claim(id, myProfile)
     void ensureThread(id)
   })
 
@@ -517,17 +534,17 @@ export function apply(ctx: Context, config: Config): void {
 
   async function deliverPrompt(sessionId: string, content: ContentBlock[]): Promise<void> {
     try {
-      const agent = await resolveAgent(sessionId)
-      if (agent === undefined) {
-        await send(sessionId, t('resume_none'))
+      const resolved = await resolveAgent(sessionId)
+      if (resolved.agent === undefined) {
+        await send(sessionId, resolved.refusal ?? t('resume_none'))
         return
       }
       const message = createUserMessage({ content, source: { kind: 'user' } })
       queuedIds.add(message.id)
-      if (agent.status === 'running') {
-        agent.steer(message)
+      if (resolved.agent.status === 'running') {
+        resolved.agent.steer(message)
       } else {
-        agent.followup(message)
+        resolved.agent.followup(message)
       }
     } catch (error) {
       await send(sessionId, t('err_generic', { detail: safe(error).slice(0, 200) }))
@@ -881,8 +898,19 @@ export function apply(ctx: Context, config: Config): void {
     })
   }
 
-  ctx.setInterval(elect, LOCK_INTERVAL_MS)
-  elect()
+  /**
+   * One shared cadence: refresh this profile's liveness entry (so poll owners
+   * elsewhere refuse to wake this process's sessions), then contest or keep
+   * the poll lock. Every active bridge beats — poll ownership and liveness
+   * are independent facts.
+   */
+  function tick(): void {
+    beatProfile(stateDir, myProfile, (error) => log('warn', 'profile beat write failed', error))
+    elect()
+  }
+
+  ctx.setInterval(tick, LOCK_INTERVAL_MS)
+  tick()
 
   log('info', `mounted (mode: ${config.mode}, mirror: ${config.mirror}, locale: ${locale()})`)
 
@@ -891,6 +919,7 @@ export function apply(ctx: Context, config: Config): void {
   ctx.effect(() => async () => {
     // The election interval is an effect the framework clears itself.
     if (leading) releaseLock(stateDir)
+    clearProfileBeat(stateDir, myProfile)
     await telegram.stop()
     for (const timer of typingTimers.values()) clearInterval(timer)
     typingTimers.clear()

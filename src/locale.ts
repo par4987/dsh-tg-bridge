@@ -21,6 +21,7 @@ const ES: Catalog = {
   msg_no_target: '🤷 Este hilo no pertenece a ninguna sesión y la raíz del chat no apunta a ninguna — usá <code>/use <id></code> o <code>/new</code>.',
   resume_fail: '❌ No pude retomar la sesión: {detail}',
   resume_none: '🚫 Esa sesión no está activa en este proceso ni persistida — <code>/ls</code>, o creá otra con <code>/new</code>.',
+  session_elsewhere: '🔒 Esa sesión vive en el perfil <b>{profile}</b>, que está activo ahora — escribile desde ahí, o cerrá ese perfil para manejarla desde acá.',
   quote_frame: 'En respuesta a «{quote}»:\n{prompt}',
 
   // ── turn outcomes ─────────────────────────────────────────────────────────
@@ -198,6 +199,7 @@ const EN: Catalog = {
   msg_no_target: '🤷 This thread belongs to no session and the chat root points to none — use <code>/use <id></code> or <code>/new</code>.',
   resume_fail: '❌ Could not resume the session: {detail}',
   resume_none: '🚫 That session is neither active in this process nor persisted — <code>/ls</code>, or start another with <code>/new</code>.',
+  session_elsewhere: '🔒 That session lives in profile <b>{profile}</b>, which is active right now — write to it from there, or close that profile to drive it from here.',
   quote_frame: 'Replying to “{quote}”:\n{prompt}',
 
   // ── turn outcomes ──────────────────────────────────────────────────────────

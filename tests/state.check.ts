@@ -67,4 +67,33 @@ export const stateChecks: Check[] = [
     assert(state.sessionByPrefix('SES-ABC') === 'ses-AbC123', 'a prefix with other case resolves')
     assert(state.sessionByPrefix('zzz') === undefined, 'an unknown prefix resolves to nothing')
   }),
+
+  define('concurrent instances merge instead of clobbering each other', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tg-bridge-state-'))
+    const file = join(dir, 'state.json')
+    // Two processes with their own instances over one file: an interleaved
+    // write must not wipe the other one's mapping.
+    const web = new BridgeState(file)
+    web.setThread('ses-web', 1)
+    const desktop = new BridgeState(file)
+    desktop.setThread('ses-desktop', 2)
+    assert(web.threadOf('ses-web') === 1, 'the first writer sees its own mapping')
+    assert(web.threadOf('ses-desktop') === 2, 'the first writer also sees the second one\'s mapping')
+    assert(desktop.threadOf('ses-web') === 1, 'the second writer sees the first one\'s mapping')
+    // An interleaved mutation from the first writer keeps the second's data.
+    web.setTitle('ses-web', 'título')
+    assert(desktop.titleOf('ses-web') === 'título', 'the desktop instance sees the title')
+    assert(desktop.threadOf('ses-desktop') === 2, 'the desktop mapping survives the web write')
+    rmSync(dir, { recursive: true, force: true })
+  }),
+
+  define('profile claims travel with the mapping', () => {
+    const { state } = freshState()
+    state.claim('ses-1', 'web')
+    assert(state.profileOf('ses-1') === 'web', 'the claim is recorded')
+    state.claim('ses-1', 'desktop')
+    assert(state.profileOf('ses-1') === 'desktop', 'a re-claim replaces the profile')
+    const other = state.profileOf('ses-none')
+    assert(other === undefined, 'an unknown session has no profile')
+  }),
 ]

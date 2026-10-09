@@ -115,3 +115,78 @@ export function lockHeldBy(stateDir: string): number | undefined {
 
 /** The election cadence the caller should schedule. */
 export const LOCK_INTERVAL_MS = HEARTBEAT_MS
+
+// ── per-profile liveness ─────────────────────────────────────────────────────
+
+/**
+ * Which profiles have a live bridge, for the poll owner's routing guard: an
+ * inbound prompt may wake a persisted session, and waking one another live
+ * process is already driving would point two agents at the same log. Each
+ * loaded bridge refreshes its own entry every election tick; an entry whose
+ * heartbeat went stale is a profile that left the room.
+ */
+export interface ProfileBeat {
+  pid: number
+  beat: number
+}
+
+interface BeatsFile {
+  profiles?: Record<string, ProfileBeat>
+}
+
+function beatsPath(stateDir: string): string {
+  return join(stateDir, 'profiles.json')
+}
+
+function readBeats(stateDir: string): Record<string, ProfileBeat> {
+  try {
+    const parsed = JSON.parse(readFileSync(beatsPath(stateDir), 'utf8')) as BeatsFile
+    return parsed.profiles ?? {}
+  } catch {
+    return {}
+  }
+}
+
+/** Refresh this profile's liveness entry. */
+export function beatProfile(stateDir: string, profile: string, onWarn: (detail: unknown) => void = () => {}): void {
+  const beats = readBeats(stateDir)
+  beats[profile] = { pid: process.pid, beat: Date.now() }
+  try {
+    mkdirSync(dirname(beatsPath(stateDir)), { recursive: true })
+    writeFileSync(beatsPath(stateDir), JSON.stringify({ profiles: beats }))
+  } catch (error) {
+    onWarn(error)
+  }
+}
+
+/** Drop this profile's liveness entry on teardown. */
+export function clearProfileBeat(stateDir: string, profile: string): void {
+  const beats = readBeats(stateDir)
+  if (!(profile in beats)) return
+  delete beats[profile]
+  try {
+    mkdirSync(dirname(beatsPath(stateDir)), { recursive: true })
+    writeFileSync(beatsPath(stateDir), JSON.stringify({ profiles: beats }))
+  } catch {
+    /* a stale entry expires on its own */
+  }
+}
+
+/**
+ * True when the session's owning profile is a DIFFERENT profile whose
+ * bridge is still beating — the poll owner must not resume its sessions.
+ * @param stateDir - the shared state directory.
+ * @param sessionProfile - the profile recorded on the mapping.
+ * @param myProfile - the profile this process runs under.
+ * @param now - single wall-clock sample for staleness.
+ */
+export function isElsewhereLive(
+  stateDir: string,
+  sessionProfile: string | undefined,
+  myProfile: string,
+  now = Date.now(),
+): boolean {
+  if (sessionProfile === undefined || sessionProfile === myProfile) return false
+  const beat = readBeats(stateDir)[sessionProfile]
+  return beat !== undefined && now - beat.beat < WEDGED_MS
+}
