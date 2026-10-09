@@ -33,11 +33,11 @@ Desde GitHub (recomendado, con el commit pineado):
 dsh plugin --profile web add github:par4987/dsh-tg-bridge#<sha>
 ```
 
-La primera vez pnpm rechaza el build del paquete git; copiá la clave exacta que imprime en el `pnpm-workspace.yaml` del perfil (`$DSH_HOME/profiles/web/`, por defecto `~/.dsh/profiles/web/`):
+La primera vez pnpm rechaza el build del paquete git con un aviso que incluye la **clave exacta** (larga, con la URL de codeload y el sha); copiala en el `pnpm-workspace.yaml` del perfil (`$DSH_HOME/profiles/web/`, por default `~/.dsh/profiles/web/`):
 
 ```yaml
 allowBuilds:
-  dsh-tg-bridge: true
+  "dsh-tg-bridge@https://codeload.github.com/par4987/dsh-tg-bridge/tar.gz/<sha>": true
 ```
 
 y repetí el `add`. Ese permiso ejecuta el `prepare` del paquete (tsdown) — solo permitilo si confiás en el código, y pineá el commit para que un push posterior no cambie lo que corre.

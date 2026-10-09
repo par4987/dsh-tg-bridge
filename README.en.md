@@ -35,11 +35,11 @@ From GitHub (recommended, commit-pinned):
 dsh plugin --profile web add github:par4987/dsh-tg-bridge#<sha>
 ```
 
-The first time, pnpm refuses the git package's build; copy the exact key it prints into the profile's `pnpm-workspace.yaml` (`$DSH_HOME/profiles/web/`, by default `~/.dsh/profiles/web/`):
+The first time, pnpm refuses the git package's build with a notice that includes the **exact key** (the long form, with the codeload URL and the sha); copy it into the profile's `pnpm-workspace.yaml` (`$DSH_HOME/profiles/web/`, by default `~/.dsh/profiles/web/`):
 
 ```yaml
 allowBuilds:
-  dsh-tg-bridge: true
+  "dsh-tg-bridge@https://codeload.github.com/par4987/dsh-tg-bridge/tar.gz/<sha>": true
 ```
 
 and repeat the `add`. That allowance runs the package's `prepare` (tsdown) — only allow it for code you trust, and pin the commit so a later push cannot silently change what runs.
