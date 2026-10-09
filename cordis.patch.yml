@@ -1,0 +1,19 @@
+# The dsh-tg-bridge bundle layer: inserts the Telegram bridge plugin.
+#
+# A profile that lists this bundle composes the row below; later layers
+# (the profile's own cordis.patch.yml, the home-level one, or a --patch
+# overlay) can override its complete `config` by this same id:
+#
+#   - id: tg-bridge
+#     config:
+#       mode: live
+#       token: 123456:ABC...
+#       allowedUsers: [123456789]
+#
+# The row references the package by name so Node resolution finds the
+# installed code; the plugin's exported Schemastery schema supplies every
+# default and validates the rest.
+
+- insert:
+    - id: tg-bridge
+      name: dsh-tg-bridge

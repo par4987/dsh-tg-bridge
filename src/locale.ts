@@ -1,0 +1,393 @@
+/**
+ * i18n — every string the bridge itself shows.
+ *
+ * Spanish-first (its users are), with a complete English catalog beside it:
+ * `locale: 'en'` in configuration (or `/locale en` at runtime, persisted)
+ * switches. A new locale is a new object in CATALOGS — nothing else.
+ */
+
+type Catalog = Record<string, string>
+
+const ES: Catalog = {
+  // ── renderer labels ────────────────────────────────────────────────────────
+  no_title: '(sin título)',
+  tool_cancelled: 'cancelada',
+  diff_lines_note: '… (+{added}/-{removed} líneas recortadas)',
+
+  // ── prompt receipts and routing ───────────────────────────────────────────
+  prompt_receipt: '📤\n{text}',
+  queued_notice: '📥 Está trabajando — tu mensaje entra en el próximo paso.',
+  reminder_receipt: '⏰ Recordatorio disparado:\n{text}',
+  msg_no_target: '🤷 Este hilo no pertenece a ninguna sesión y la raíz del chat no apunta a ninguna — usá <code>/use <id></code> o <code>/new</code>.',
+  resume_fail: '❌ No pude retomar la sesión: {detail}',
+  resume_none: '🚫 Esa sesión no está activa en este proceso ni persistida — <code>/ls</code>, o creá otra con <code>/new</code>.',
+  quote_frame: 'En respuesta a «{quote}»:\n{prompt}',
+
+  // ── turn outcomes ─────────────────────────────────────────────────────────
+  turn_failed: '❌ El turno falló: {detail}',
+  turn_aborted: '⛔ Turno cancelado.',
+  turn_blocked: '⛔ Turno bloqueado.',
+  turn_max_tokens: '⚠️ Se alcanzó el límite de tokens de salida.',
+
+  // ── approvals ─────────────────────────────────────────────────────────────
+  approval_header: '🔐 <b>Permiso</b> — herramienta <code>{tool}</code>',
+  approval_reason: '\nMotivo: {reason}',
+  approval_allow: '✅ Una vez',
+  approval_reject: '✖ Rechazar',
+  approval_allowed: '✅ Permitido',
+  approval_rejected: '✖ Rechazado',
+  approval_cancelled: '⏹ Se canceló la espera.',
+  form_inactive: '⚠️ Ya no está pendiente — alguien lo respondió o se canceló.',
+
+  // ── questions ─────────────────────────────────────────────────────────────
+  questions_header: '❓ <b>Pregunta del agente</b>',
+  question_header_label: '{header}',
+  question_numbered: '\n\n<b>{i}/{n}</b> — {question}',
+  question_plain: '\n\n{question}',
+  question_detail: '\n{detail}',
+  question_options_hint: '\n<i>Tocá una opción o respondé con su número.</i>',
+  question_multi_hint: '\n<i>Varias: tocá y confirmá.</i>',
+  question_other: '✍️ Otra (respondé con texto)',
+  question_confirm: '✅ Confirmar',
+  question_answered: '✅ Respondido: {answer}',
+  question_skipped: '⏭ Omitida',
+  question_cancelled: '⏹ Pregunta cancelada.',
+
+  // ── inbound media ──────────────────────────────────────────────────────────
+  voice_transcribing: '🎤 Transcribiendo…',
+  voice_fail: '❌ Transcripción fallida: {detail}',
+  voice_empty: '🎤 La nota de voz no trae habla reconocible.',
+  voice_disabled: '🎤 Las notas de voz no se transcriben todavía: en la configuración del plugin agregá <code>stt: {"provider":"local"}</code> (whisper.cpp) o <code>stt: {"provider":"openai-compatible","baseUrl":"…","model":"…"}</code> — el manual tiene el recorrido.',
+  voice_download_fail: '⚠️ No pude descargar la nota de voz: {detail}',
+  photo_fail: '⚠️ No pude procesar la foto: {detail}',
+  photo_route_unsupported: '📷 El modelo actual no acepta imágenes — la guardé en <code>{path}</code> y se lo dije así.',
+  doc_inline: '📄 <b>{name}</b> ({chars} caracteres)',
+  doc_saved: '💾 <b>{name}</b> → <code>{path}</code>',
+  media_download_fail: '⚠️ No pude descargar el archivo: {detail}',
+  media_prompt_fail: '⚠️ No pude entregar el archivo al agente: {detail}',
+
+  // ── outbound media ─────────────────────────────────────────────────────────
+  files_header: '📎 Generado en este turno:',
+
+  // ── commands ───────────────────────────────────────────────────────────────
+  unknown_command: '¿{cmd}? Mirá <code>/help</code>.',
+  help_body: [
+    '<b>dsh-tg-bridge</b> — cada sesión del harness tiene su hilo acá.',
+    '',
+    '<b>/new</b> [ruta] — nueva sesión (default: {workspace})',
+    '<b>/ls</b> — sesiones mapeadas',
+    '<b>/use</b> <id|prefijo> — la raíz del chat apunta a esa sesión',
+    '<b>/detach</b> — desacoplar la raíz',
+    '<b>/models</b> — rutas de modelo y la actual',
+    '<b>/usagestats</b> — tokens de la sesión',
+    '<b>/queue</b> — inbox pendiente de la sesión',
+    '<b>/flush</b> — enviar los buffers de coalescing ahora',
+    '<b>/history</b> [n] — últimos intercambios',
+    '<b>/find</b> <texto> — buscar sesiones por título',
+    '<b>/archive</b> / <b>/unarchive</b> — cerrar/reabrir este hilo',
+    '<b>/kill</b> — cancelar el turno en curso',
+    '<b>/tasks</b> — recordatorios de la sesión',
+    '<b>/newtask</b> — asistente de recordatorio',
+    '<b>/locale</b> es|en — idiomabot',
+    '<b>/help</b> — esta lista',
+  ].join('\n'),
+  new_usage: 'Uso: <code>/new [ruta absoluta]</code> — crea la sesión en esa carpeta (default: {workspace}).',
+  new_done: '✨ Sesión <code>{id}</code> en <b>{dir}</b>.\nEscribile — su hilo se crea con el primer mensaje.',
+  new_fail: '❌ No pude crear la sesión: {detail}',
+  ls_header: '📂 <b>Sesiones ({n})</b> — <code>/use <id></code> abre una:',
+  ls_none: '📂 Todavía no hay sesiones mapeadas — <code>/new</code> crea una, o esperá a que <code>mirror: all</code> genere su hilo.',
+  ls_entry: '{dot} <code>{id}</code>{live}{archived} {title}',
+  ls_live: ' ●',
+  ls_archived: ' 📦',
+  ago_now: 'hace un momento',
+  ago_min: 'hace {n} min',
+  ago_hour: 'hace {n} h',
+  ago_day: 'hace {n} d',
+  use_usage: 'Decime el id (o un prefijo): <code>/use <id></code>',
+  use_done: '🎯 La raíz del chat ahora apunta a <code>{id}</code>.',
+  use_not_found: 'No encuentro esa sesión — <code>/ls</code> muestra las mapeadas.',
+  detach_done: '🚪 Raíz desacoplada — lo que escribas acá ya no va a ninguna sesión.',
+  detach_none: 'La raíz ya no apunta a ninguna sesión.',
+  models_header: '🧠 <b>Rutas de modelo</b>',
+  models_current: '\n➡️ Actual: <code>{provider}/{model}</code>',
+  models_route: '\n• <code>{provider}/{model}</code>',
+  models_fail: '❌ No pude listar modelos: {detail}',
+  usage_header: '📊 <b>Uso — {label}</b>',
+  usage_last: '\nÚltimo turno: {in} in + {out} out = {total}',
+  usage_total: '\nAcumulado: {in} in + {out} out = {total}',
+  usage_ctx: '\nContexto: {used} / {size} tokens',
+  usage_none: 'Sin uso registrado todavía.',
+  queue_none: '📥 La cola está vacía.',
+  queue_header: '📥 <b>Cola de la sesión</b>',
+  queue_turn: '\nSiguiente turno: {n} mensaje(s)',
+  queue_step: '\nSiguiente paso: {n} steering(s)',
+  flush_none: 'Nada encolado.',
+  flush_done: '✅ {n} buffer(s) enviados.',
+  archive_usage: 'Usalo dentro de un hilo, o con un id: <code>/archive [id]</code>.',
+  archive_done: '📦 Hilo cerrado — reabrilo con <code>/unarchive</code>.',
+  archive_none: 'Este hilo no está mapeado a ninguna sesión.',
+  unarchive_recreated: '📂 Hilo recreado.',
+  unarchive_done: '📂 Hilo reabierto.',
+  find_usage: 'Decime qué buscar: <code>/find <texto></code>',
+  find_header: '🔍 {n} resultado(s):',
+  find_none: '🔍 Nada con «{query}».',
+  history_none: 'Sin historial visible — la sesión no está activa en este proceso.',
+  history_header: '📜 Últimos {n} intercambios:',
+  kill_done: '⛔ Turno cancelado.',
+  kill_none: 'La sesión no está activa en este proceso.',
+  tasks_unavailable: '⏳ Este perfil no compone el subsistema Schedule — los recordatorios model-facing no están disponibles acá.',
+  tasks_none: '⏰ Sin recordatorios en esta sesión.',
+  tasks_header: '⏰ <b>Recordatorios ({n})</b>',
+  task_entry: '\n• {prompt}',
+  task_next: ' — próxima: {when}',
+  task_created: '⏰ Recordatorio creado: {summary}',
+  task_fail: '❌ No pude crear el recordatorio: {detail}',
+  task_deleted: '🗑 Recordatorio eliminado.',
+  newtask_taken: 'Ya hay un asistente en marcha — terminálo o <code>/newtask cancelar</code>.',
+  newtask_cancelled: '🚫 Asistente cancelado.',
+  newtask_name: '¿Cómo se llama? (un nombre corto)',
+  newtask_prompt: '¿Qué debe hacer el agente cuando dispare? (el prompt)',
+  newtask_type: '¿Cada cuánto?',
+  newtask_types: '\n1️⃣ una vez · 2️⃣ todos los días · 3️⃣ semanal · 4️⃣ cada N minutos',
+  newtask_detail_once: '¿Cuándo? (<code>2026-12-01 09:00</code> o <code>01/12 09:00</code>)',
+  newtask_detail_daily: '¿A qué hora? (<code>09:00</code>)',
+  newtask_detail_weekly: '¿Qué día y hora? (<code>lun 09:00</code>)',
+  newtask_detail_minutes: '¿Cada cuántos minutos? (un número)',
+  newtask_confirm: '¿Crear este recordatorio?\n{summary}\n\n✅ Respondé <code>/newtask sí</code> · 🚫 <code>/newtask cancelar</code>',
+  newtask_bad: 'No entendí — probá de nuevo o <code>/newtask cancelar</code>.',
+  sched_once: 'una vez {at}',
+  sched_daily: 'todos los días a las {time}',
+  sched_weekly: 'cada {weekday} a las {time}',
+  sched_mins: 'cada {n} minutos',
+  sched_hours: 'cada {n} horas',
+  sched_hours_mins: 'cada {h}h{m}m',
+  days_short: 'dom,lun,mar,mie,jue,vie,sab',
+  locale_usage: 'Decime el idioma: <code>/locale es</code> o <code>/locale en</code>',
+  locale_done: '🌐 {locale}',
+
+  // ── reply context ──────────────────────────────────────────────────────────
+  media_poll: 'una encuesta: “{q}”',
+  media_topic_created: 'el mensaje que abrió el hilo “{name}”',
+  media_photo: 'una foto',
+  media_animation: 'un GIF',
+  media_document: 'el documento {name}',
+  media_sticker: 'el sticker {emoji}',
+  media_voice: 'una nota de voz ({n}s)',
+  media_audio: 'un audio ({n}s)',
+  media_video_note: 'un videomensaje ({n}s)',
+  media_video: 'el video {name}',
+  media_dice: 'un dado {emoji}',
+  media_location: 'una ubicación',
+  media_contact: 'el contacto {name}',
+  media_no_text: 'un mensaje sin texto',
+
+  // ── generic error receipt ─────────────────────────────────────────────────
+  err_generic: '⚠️ {detail}',
+}
+
+const EN: Catalog = {
+  // ── renderer labels ────────────────────────────────────────────────────────
+  no_title: '(no title)',
+  tool_cancelled: 'cancelled',
+  diff_lines_note: '… (+{added}/-{removed} lines clipped)',
+
+  // ── prompt receipts and routing ───────────────────────────────────────────
+  prompt_receipt: '📤\n{text}',
+  queued_notice: '📥 Working — your message enters the next step.',
+  reminder_receipt: '⏰ Reminder fired:\n{text}',
+  msg_no_target: '🤷 This thread belongs to no session and the chat root points to none — use <code>/use <id></code> or <code>/new</code>.',
+  resume_fail: '❌ Could not resume the session: {detail}',
+  resume_none: '🚫 That session is neither active in this process nor persisted — <code>/ls</code>, or start another with <code>/new</code>.',
+  quote_frame: 'Replying to “{quote}”:\n{prompt}',
+
+  // ── turn outcomes ──────────────────────────────────────────────────────────
+  turn_failed: '❌ The turn failed: {detail}',
+  turn_aborted: '⛔ Turn cancelled.',
+  turn_blocked: '⛔ Turn blocked.',
+  turn_max_tokens: '⚠️ Output token limit reached.',
+
+  // ── approvals ──────────────────────────────────────────────────────────────
+  approval_header: '🔐 <b>Permission</b> — tool <code>{tool}</code>',
+  approval_reason: '\nReason: {reason}',
+  approval_allow: '✅ Allow once',
+  approval_reject: '✖ Reject',
+  approval_allowed: '✅ Allowed',
+  approval_rejected: '✖ Rejected',
+  approval_cancelled: '⏹ The wait was cancelled.',
+  form_inactive: '⚠️ No longer pending — answered or cancelled elsewhere.',
+
+  // ── questions ──────────────────────────────────────────────────────────────
+  questions_header: '❓ <b>The agent asks</b>',
+  question_header_label: '{header}',
+  question_numbered: '\n\n<b>{i}/{n}</b> — {question}',
+  question_plain: '\n\n{question}',
+  question_detail: '\n{detail}',
+  question_options_hint: '\n<i>Tap an option, or reply with its number.</i>',
+  question_multi_hint: '\n<i>Several: tap them, then confirm.</i>',
+  question_other: '✍️ Other (reply with text)',
+  question_confirm: '✅ Confirm',
+  question_answered: '✅ Answered: {answer}',
+  question_skipped: '⏭ Skipped',
+  question_cancelled: '⏹ Question cancelled.',
+
+  // ── inbound media ───────────────────────────────────────────────────────────
+  voice_transcribing: '🎤 Transcribing…',
+  voice_fail: '❌ Transcription failed: {detail}',
+  voice_empty: '🎤 The voice note has no recognizable speech.',
+  voice_disabled: '🎤 Voice notes are not transcribed yet: add <code>stt: {"provider":"local"}</code> (whisper.cpp) or <code>stt: {"provider":"openai-compatible","baseUrl":"…","model":"…"}</code> to the plugin configuration — the manual walks you through it.',
+  voice_download_fail: '⚠️ Could not download the voice note: {detail}',
+  photo_fail: '⚠️ Could not process the photo: {detail}',
+  photo_route_unsupported: '📷 The current model does not accept images — saved to <code>{path}</code> and told as much.',
+  doc_inline: '📄 <b>{name}</b> ({chars} characters)',
+  doc_saved: '💾 <b>{name}</b> → <code>{path}</code>',
+  media_download_fail: '⚠️ Could not download the file: {detail}',
+  media_prompt_fail: '⚠️ Could not hand the file to the agent: {detail}',
+
+  // ── outbound media ─────────────────────────────────────────────────────────
+  files_header: '📎 Produced this turn:',
+
+  // ── commands ───────────────────────────────────────────────────────────────
+  unknown_command: '{cmd}? See <code>/help</code>.',
+  help_body: [
+    '<b>dsh-tg-bridge</b> — every harness session gets its own thread here.',
+    '',
+    '<b>/new</b> [path] — new session (default: {workspace})',
+    '<b>/ls</b> — mapped sessions',
+    '<b>/use</b> <id|prefix> — point the chat root at a session',
+    '<b>/detach</b> — unpoint the root',
+    '<b>/models</b> — model routes and the current one',
+    '<b>/usagestats</b> — session tokens',
+    '<b>/queue</b> — session inbox',
+    '<b>/flush</b> — send coalescing buffers now',
+    '<b>/history</b> [n] — last exchanges',
+    '<b>/find</b> <text> — find sessions by title',
+    '<b>/archive</b> / <b>/unarchive</b> — close/reopen this thread',
+    '<b>/kill</b> — cancel the running turn',
+    '<b>/tasks</b> — session reminders',
+    '<b>/newtask</b> — reminder wizard',
+    '<b>/locale</b> es|en — interface language',
+    '<b>/help</b> — this list',
+  ].join('\n'),
+  new_usage: 'Usage: <code>/new [absolute path]</code> — creates the session in that folder (default: {workspace}).',
+  new_done: '✨ Session <code>{id}</code> in <b>{dir}</b>.\nWrite to it — its thread is created with the first message.',
+  new_fail: '❌ Could not create the session: {detail}',
+  ls_header: '📂 <b>Sessions ({n})</b> — <code>/use <id></code> opens one:',
+  ls_none: '📂 No mapped sessions yet — <code>/new</code> creates one, or wait for <code>mirror: all</code> to give it a thread.',
+  ls_entry: '{dot} <code>{id}</code>{live}{archived} {title}',
+  ls_live: ' ●',
+  ls_archived: ' 📦',
+  ago_now: 'just now',
+  ago_min: '{n} min ago',
+  ago_hour: '{n} h ago',
+  ago_day: '{n} d ago',
+  use_usage: 'Give me the id (or a prefix): <code>/use <id></code>',
+  use_done: '🎯 The chat root now points to <code>{id}</code>.',
+  use_not_found: 'Cannot find that session — <code>/ls</code> lists the mapped ones.',
+  detach_done: '🚪 Root detached — what you write here goes to no session.',
+  detach_none: 'The root already points to no session.',
+  models_header: '🧠 <b>Model routes</b>',
+  models_current: '\n➡️ Current: <code>{provider}/{model}</code>',
+  models_route: '\n• <code>{provider}/{model}</code>',
+  models_fail: '❌ Could not list models: {detail}',
+  usage_header: '📊 <b>Usage — {label}</b>',
+  usage_last: '\nLast turn: {in} in + {out} out = {total}',
+  usage_total: '\nAccumulated: {in} in + {out} out = {total}',
+  usage_ctx: '\nContext: {used} / {size} tokens',
+  usage_none: 'No usage recorded yet.',
+  queue_none: '📥 The inbox is empty.',
+  queue_header: '📥 <b>Session inbox</b>',
+  queue_turn: '\nNext turn: {n} message(s)',
+  queue_step: '\nNext step: {n} steering(s)',
+  flush_none: 'Nothing queued.',
+  flush_done: '✅ {n} buffer(s) sent.',
+  archive_usage: 'Use it inside a thread, or with an id: <code>/archive [id]</code>.',
+  archive_done: '📦 Thread closed — reopen with <code>/unarchive</code>.',
+  archive_none: 'This thread maps to no session.',
+  unarchive_recreated: '📂 Thread recreated.',
+  unarchive_done: '📂 Thread reopened.',
+  find_usage: 'Tell me what to look for: <code>/find <text></code>',
+  find_header: '🔍 {n} result(s):',
+  find_none: '🔍 Nothing matching “{query}”.',
+  history_none: 'No visible history — the session is not active in this process.',
+  history_header: '📜 Last {n} exchanges:',
+  kill_done: '⛔ Turn cancelled.',
+  kill_none: 'The session is not active in this process.',
+  tasks_unavailable: '⏳ This profile does not compose the Schedule subsystem — model-facing reminders are unavailable here.',
+  tasks_none: '⏰ No reminders in this session.',
+  tasks_header: '⏰ <b>Reminders ({n})</b>',
+  task_entry: '\n• {prompt}',
+  task_next: ' — next: {when}',
+  task_created: '⏰ Reminder created: {summary}',
+  task_fail: '❌ Could not create the reminder: {detail}',
+  task_deleted: '🗑 Reminder deleted.',
+  newtask_taken: 'A wizard is already running — finish it or <code>/newtask cancel</code>.',
+  newtask_cancelled: '🚫 Wizard cancelled.',
+  newtask_name: 'What is its name? (a short one)',
+  newtask_prompt: 'What should the agent do when it fires? (the prompt)',
+  newtask_type: 'How often?',
+  newtask_types: '\n1️⃣ once · 2️⃣ daily · 3️⃣ weekly · 4️⃣ every N minutes',
+  newtask_detail_once: 'When? (<code>2026-12-01 09:00</code> or <code>01/12 09:00</code>)',
+  newtask_detail_daily: 'At what time? (<code>09:00</code>)',
+  newtask_detail_weekly: 'Which day and time? (<code>mon 09:00</code>)',
+  newtask_detail_minutes: 'Every how many minutes? (a number)',
+  newtask_confirm: 'Create this reminder?\n{summary}\n\n✅ Reply <code>/newtask yes</code> · 🚫 <code>/newtask cancel</code>',
+  newtask_bad: 'Did not understand — try again or <code>/newtask cancel</code>.',
+  sched_once: 'once at {at}',
+  sched_daily: 'every day at {time}',
+  sched_weekly: 'every {weekday} at {time}',
+  sched_mins: 'every {n} minutes',
+  sched_hours: 'every {n} hours',
+  sched_hours_mins: 'every {h}h{m}m',
+  days_short: 'sun,mon,tue,wed,thu,fri,sat',
+  locale_usage: 'Name the language: <code>/locale es</code> or <code>/locale en</code>',
+  locale_done: '🌐 {locale}',
+
+  // ── reply context ──────────────────────────────────────────────────────────
+  media_poll: 'a poll: “{q}”',
+  media_topic_created: 'the message that opened the thread “{name}”',
+  media_photo: 'a photo',
+  media_animation: 'a GIF',
+  media_document: 'the document {name}',
+  media_sticker: 'the sticker {emoji}',
+  media_voice: 'a voice note ({n}s)',
+  media_audio: 'an audio ({n}s)',
+  media_video_note: 'a video message ({n}s)',
+  media_video: 'the video {name}',
+  media_dice: 'a dice {emoji}',
+  media_location: 'a location',
+  media_contact: 'the contact {name}',
+  media_no_text: 'a message with no text',
+
+  // ── generic error receipt ───────────────────────────────────────────────────
+  err_generic: '⚠️ {detail}',
+}
+
+const CATALOGS: Record<'es' | 'en', Catalog> = { es: ES, en: EN }
+
+let current: 'es' | 'en' = 'es'
+
+/** The active interface language. */
+export function locale(): 'es' | 'en' {
+  return current
+}
+
+/** Switch the active interface language (persisted by the caller). */
+export function setLocale(value: 'es' | 'en'): void {
+  if (value !== 'es' && value !== 'en') return
+  current = value
+}
+
+/**
+ * One localized line. `{name}` placeholders interpolate; a missing key falls
+ * back to the key itself so a catalog gap degrades visibly, never silently.
+ */
+export function t(key: string, params?: Record<string, string | number>): string {
+  const catalog = CATALOGS[current]
+  let template = catalog[key] ?? CATALOGS.es[key] ?? key
+  if (params !== undefined) {
+    for (const [name, value] of Object.entries(params)) {
+      template = template.replaceAll(`{${name}}`, String(value))
+    }
+  }
+  return template
+}

@@ -1,0 +1,47 @@
+{
+  // Typechecks this plugin against the deepseek-harness checkout it targets.
+  //
+  // The harness sources compile under their own per-package flags, so this
+  // project consumes the artifact plane instead: the declarations its build
+  // emits under each package's `lib/types`. Build the harness once
+  // (`pnpm run build` at its root), keep `extends`/`paths` pointing at your
+  // own clone, and `pnpm typecheck` checks only this plugin's code.
+  //
+  // CI never typechecks: the pure-logic suites under tests/ import no
+  // harness package and run with `node --experimental-strip-types`.
+  "compilerOptions": {
+    "target": "es2024",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitAny": true,
+    "esModuleInterop": true,
+    "allowImportingTsExtensions": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": ["node"],
+    "paths": {
+      "@deepseek-ai/cordis": ["C:/Users/pablo/mcp-servers/deepseek-harness/vendor/cordis/lib/types/index.d.ts"],
+      "@deepseek-ai/cordis-plugin-timer": ["C:/Users/pablo/mcp-servers/deepseek-harness/vendor/timer/lib/types/index.d.ts"],
+      "@deepseek-ai/schemastery": ["C:/Users/pablo/mcp-servers/deepseek-harness/vendor/schemastery/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-brand": ["C:/Users/pablo/mcp-servers/deepseek-harness/packages/util/brand/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-llm": ["C:/Users/pablo/mcp-servers/deepseek-harness/packages/llm/llm/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-session": ["C:/Users/pablo/mcp-servers/deepseek-harness/packages/core/session/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-session-persistence": ["C:/Users/pablo/mcp-servers/deepseek-harness/packages/session/session-persistence/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-agent": ["C:/Users/pablo/mcp-servers/deepseek-harness/packages/core/agent/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-attachment": ["C:/Users/pablo/mcp-servers/deepseek-harness/packages/attachment/attachment/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-user-approval": ["C:/Users/pablo/mcp-servers/deepseek-harness/packages/interaction/user-approval/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-user-approval/types": ["C:/Users/pablo/mcp-servers/deepseek-harness/packages/interaction/user-approval/lib/types/types.d.ts"],
+      "@deepseek-ai/dsh-user-questions": ["C:/Users/pablo/mcp-servers/deepseek-harness/packages/interaction/user-questions/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-user-questions/types": ["C:/Users/pablo/mcp-servers/deepseek-harness/packages/interaction/user-questions/lib/types/types.d.ts"],
+      "@deepseek-ai/dsh-schedule": ["C:/Users/pablo/mcp-servers/deepseek-harness/packages/schedule/schedule/lib/types/index.d.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "tests/**/*.ts"]
+}

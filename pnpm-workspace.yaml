@@ -1,0 +1,19 @@
+# The @deepseek-ai/* peers are provided by the dsh profile that installs this
+# bundle (Node resolves them through pnpm's hidden hoist); fetching them from
+# the registry would pin a stale generation, so peers stay unresolved here.
+autoInstallPeers: false
+
+peerDependencyRules:
+  allowedVersions:
+    '@deepseek-ai/*': '*'
+  ignoreMissing:
+    - '@deepseek-ai/cordis'
+    - '@deepseek-ai/schemastery'
+    - '@deepseek-ai/dsh-agent'
+    - '@deepseek-ai/dsh-attachment'
+    - '@deepseek-ai/dsh-brand'
+    - '@deepseek-ai/dsh-llm'
+    - '@deepseek-ai/dsh-schedule'
+    - '@deepseek-ai/dsh-session'
+    - '@deepseek-ai/dsh-user-approval'
+    - '@deepseek-ai/dsh-user-questions'

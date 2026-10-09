@@ -1,0 +1,17 @@
+# Composition smoke: inserts the bridge in dry mode over any base-backed
+# profile. Run from the harness checkout:
+#
+#   pnpm dsh --profile headless "ping" \
+#     --patch "E:/Projects/Default Project/dsh-tg-bridge/dev/smoke.patch.yml"
+#
+# Dry mode never touches Telegram; state lands in a temp directory. The
+# expected signal is the `tg-bridge: mounted` line before the profile's own
+# task output (or its model failure when no API key is configured).
+- insert:
+    - id: tg-bridge
+      name: 'E:/Projects/Default Project/dsh-tg-bridge/src/index.ts'
+      config:
+        mode: dry
+        token: smoke-test-token
+        allowedUsers: [123456789]
+        stateDir: 'C:/Users/pablo/AppData/Local/Temp/opencode/tg-bridge-smoke'
