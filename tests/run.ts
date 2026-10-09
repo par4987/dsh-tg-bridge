@@ -10,6 +10,7 @@ import { localeChecks } from './locale.check.ts'
 import { cardsChecks } from './cards.check.ts'
 import { streamChecks } from './stream.check.ts'
 import { answererChecks } from './answerers.check.ts'
+import { rebuildChecks } from './rebuild.check.ts'
 import type { Check } from './harness.ts'
 
 const checks: Check[] = [
@@ -22,6 +23,7 @@ const checks: Check[] = [
   ...cardsChecks,
   ...streamChecks,
   ...answererChecks,
+  ...rebuildChecks,
 ]
 
 let failed = 0

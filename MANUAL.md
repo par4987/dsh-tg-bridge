@@ -27,7 +27,7 @@ Las sesiones mapeadas: id corto, título, punto verde si está activa en este pr
 Apunta la raíz del chat a una sesión: lo que escribas sin hilo va a esa sesión. `/detach` desacopla la raíz.
 
 ### `/models`
-Las rutas de modelo registradas (proveedor/modelo) y la actual de la sesión — la que quedó registrada en el último request del log.
+Las rutas de modelo registradas como **botones**: un toque fija la ruta para el próximo request de esa sesión (después vuelve a mandar el header registrado — un toque cambia, no pelea con el log).
 
 ### `/usagestats`
 Tokens de la sesión: el último turno y el acumulado, más la ocupación de contexto (`usados / ventana`) cuando el token-meter está compuesto.
@@ -45,7 +45,7 @@ Los últimos `n` intercambios (default 8) de la sesión, leídos del log durable
 Busca sesiones por título o id.
 
 ### `/archive` / `/unarchive`
-Cierra (`close` de Telegram: visible, lectura) o reabre el hilo de la sesión. Si el hilo fue borrado desde el teléfono, `/unarchive` lo recrea. Con `archiveAfterDays > 0`, el cierre es automático tras esa inactividad.
+Borra el hilo de la sesión (y limpia el mapeo de thread, conservando título/uso/archivada) y `/unarchive` lo recrea nuevo — misma semántica que tu opencode-tg en chats privados, donde cerrar tópicos no aplica. Con `archiveAfterDays > 0`, el borrado es automático tras esa inactividad.
 
 ### `/kill`
 Cancela el turno en curso de la sesión.
@@ -58,6 +58,30 @@ El asistente de recordatorios, paso a paso y persistido (un reinicio no se lo co
 
 ### `/locale es|en`
 Cambia el idioma del bot y lo persiste.
+
+### `/rebuild [días]`
+Trae a Telegram las sesiones persistidas con actividad real en esa ventana (default 7 días, configurable en `rebuildDays`): título del log (`sessionQuery.readTitle`), hilo nuevo, mapeo. Nunca duplica las ya mapeadas y crea máximo 12 hilos por invocación, las más recientes primero. Es el comando para poblar el foro con el historial existente del harness.
+
+### `/running`
+Las sesiones con un turno en curso en este proceso.
+
+### `/export`
+El log durable de la sesión como documento `.jsonl` (los eventos crudos, exportados por `sessionQuery.readSession`).
+
+### `/rename <título>`
+Fija el título vía el evento oficial `session/title` con origen `user` — lo ve la Web también, y la generación automática de títulos deja de re-programarse. El hilo de Telegram se renombra igual.
+
+### `/note <texto>`
+Nota silenciosa al transcript (`agent.inject()`): el agente la ve en su próximo turno, sin despertarse ahora.
+
+### `/sh <comando>`
+Le pide al agente que corra exactamente ese comando con su tool de shell. Distinto del opencode-tg a propósito: el harness exige que todo lo que el modelo ve esté en el log, y correr shell por afuera lo rompería — además así entra al sandbox y a los permisos del perfil.
+
+### `/compact`
+Compresión manual del historial vía el seam oficial (`ctx.compaction.compactNow`). El resumen queda en el transcript; la Web lo ve.
+
+### `/txt <texto>`
+Responde con texto libre la pregunta que espera texto (lo mismo que tocar "✍️ Otra" y escribir).
 
 ## Preguntas y permisos
 

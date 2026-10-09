@@ -29,7 +29,7 @@ The mapped sessions: short id, title, a green dot when live in this process, �
 Points the chat root at a session: what you write without a thread goes to that session. `/detach` unpoints the root.
 
 ### `/models`
-The registered model routes (provider/model) and the session's current one — the route recorded in the log's last request header.
+The registered model routes as **buttons**: one tap pins the route for that session's next request (afterwards the logged header rules again — one tap switches, it does not fight the log).
 
 ### `/usagestats`
 The session's tokens: last turn and accumulated, plus context occupancy (`used / window`) when the token-meter is composed.
@@ -47,7 +47,7 @@ The session's last `n` exchanges (default 8), read from the durable log. Only se
 Finds sessions by title or id.
 
 ### `/archive` / `/unarchive`
-Closes (Telegram `close`: visible, read-only) or reopens the session's thread. If the thread was deleted from the phone, `/unarchive` recreates it. With `archiveAfterDays > 0`, closing happens automatically after that idleness.
+Deletes the session's thread (clearing the thread mapping, keeping title/usage/archived) and `/unarchive` recreates a fresh one — the same semantics as your opencode-tg in private chats, where closing topics does not apply. With `archiveAfterDays > 0`, deletion happens automatically after that idleness.
 
 ### `/kill`
 Cancels the session's running turn.
@@ -60,6 +60,30 @@ The reminder wizard, step by step and persisted (a restart cannot eat it): name 
 
 ### `/locale es|en`
 Switches the bot's language and persists it.
+
+### `/rebuild [days]`
+Brings persisted sessions with real activity inside the window (default 7 days, configurable via `rebuildDays`) to Telegram: title from the log (`sessionQuery.readTitle`), fresh thread, mapping. It never duplicates already-mapped sessions and creates at most 12 threads per run, newest first. This is the command for populating the forum with the harness's existing history.
+
+### `/running`
+Sessions with a turn in flight in this process.
+
+### `/export`
+The session's durable log as a `.jsonl` document (raw events, exported through `sessionQuery.readSession`).
+
+### `/rename <title>`
+Pins the title through the official `session/title` event with a `user` source — the Web sees it too, and automatic title generation stops rescheduling. The Telegram thread renames with it.
+
+### `/note <text>`
+A silent note into the transcript (`agent.inject()`): the agent sees it on its next turn, without waking now.
+
+### `/sh <command>`
+Asks the agent to run exactly that command with its shell tool. Deliberately different from opencode-tg: the harness requires everything the model sees to be in the log, and running shell outside it would break that — this way it also goes through the profile's sandbox and permissions.
+
+### `/compact`
+Manual history compaction through the official seam (`ctx.compaction.compactNow`). The summary lands in the transcript; the Web sees it.
+
+### `/txt <text>`
+Answers with free text the question waiting for it (same as tapping "✍️ Other" and typing).
 
 ## Questions and permissions
 

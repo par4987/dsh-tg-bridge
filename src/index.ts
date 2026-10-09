@@ -29,7 +29,7 @@ import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-user-approval'
 import type {} from '@deepseek-ai/dsh-user-questions'
 import { brandString } from '@deepseek-ai/dsh-brand'
-import { createUserMessage, expandAssistantStream, type ContentBlock } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, expandAssistantStream, type ContentBlock, type LlmCallConfig } from '@deepseek-ai/dsh-llm'
 import type { AgentHandle, AgentOptions, ModelSelection } from '@deepseek-ai/dsh-agent'
 import type { SessionId, Session } from '@deepseek-ai/dsh-session'
 import { AttachmentStore, type FileAttachmentRef, type SaveImageAttachment } from '@deepseek-ai/dsh-attachment'
@@ -38,6 +38,7 @@ import type {} from '@deepseek-ai/dsh-session-persistence'
 // Side-effect type import: declares ctx.setInterval (the timer plugin base composes).
 import type {} from '@deepseek-ai/cordis-plugin-timer'
 import { Telegram, DryRunTelegram, type Update } from './telegram.ts'
+import { MessageCards } from './cards.ts'
 import { Config, requireChatId, resolveToken } from './config.ts'
 import { BridgeState } from './state.ts'
 import { TurnRenderer } from './stream.ts'
@@ -525,6 +526,23 @@ export function apply(ctx: Context, config: Config): void {
 
   // ── prompts ────────────────────────────────────────────────────────────────
 
+  /** A model route pinned for one session's next request (`/models` picker). */
+  const pendingRoutes = new Map<string, { provider: string, model: string }>()
+
+  /**
+   * The model switch behind `/models`: the next request of the chosen session
+   * leaves with the picked route instead of its logged one. From the request
+   * after that, the newly logged header wins again — one tap changes the
+   * route, it does not fight the log.
+   */
+  ctx.on('agent/request', async (payload, next) => {
+    const base: LlmCallConfig = await next()
+    const pending = pendingRoutes.get(payload.agent.id)
+    if (pending === undefined) return base
+    pendingRoutes.delete(payload.agent.id)
+    return { ...base, provider: pending.provider, model: pending.model }
+  })
+
   interface Coalesced {
     texts: string[]
     timer: ReturnType<typeof setTimeout> | undefined
@@ -727,6 +745,56 @@ export function apply(ctx: Context, config: Config): void {
 
   // ── commands ────────────────────────────────────────────────────────────────
 
+  /** Route lists bound to each `/models` card, addressed by callback index. */
+  const modelCards = new MessageCards<Array<{ provider: string, model: string }>>(10)
+
+  /** The `/models` picker: current route plus one button per route. */
+  async function sendModelPicker(
+    sessionId: string | undefined,
+    current: string | undefined,
+    routes: Array<{ provider: string, model: string }>,
+  ): Promise<void> {
+    const lines = [t('models_header')]
+    if (current !== undefined) lines.push(current)
+    lines.push(t('models_pick'))
+    const rows = routes.slice(0, 30).map((route, index) => [{
+      text: `${route.provider}/${route.model}`.slice(0, 60),
+      callback_data: `m:${index}`,
+    }])
+    const thread = sessionId !== undefined ? state.threadOf(sessionId) : undefined
+    const messageId = await telegram.sendMessage(chatId, lines.join(''), {
+      parseMode: 'HTML',
+      ...(thread === undefined ? {} : { messageThreadId: thread }),
+      replyMarkup: { inline_keyboard: rows },
+    })
+    if (messageId !== null) modelCards.set(messageId, routes)
+  }
+
+  /** One tap on the picker pins that route for the session's next request. */
+  async function handleModelCallback(payload: string, messageId: number | undefined, cqId: string, sessionId: string): Promise<boolean> {
+    if (!payload.startsWith('m:')) return false
+    const routes = modelCards.get(messageId)
+    const index = Number(payload.slice(2))
+    if (routes === undefined || !Number.isInteger(index) || index < 0 || index >= routes.length) {
+      await telegram.answerCallbackQuery(cqId, t('form_inactive')).catch(() => undefined)
+      return true
+    }
+    const route = routes[index]
+    if (route === undefined) return true
+    modelCards.drop(messageId)
+    pendingRoutes.set(sessionId, route)
+    await telegram.answerCallbackQuery(cqId).catch(() => undefined)
+    const thread = state.threadOf(sessionId)
+    await telegram.sendMessage(chatId, t('models_switched', {
+      provider: escapeHtml(route.provider),
+      model: escapeHtml(route.model),
+    }), {
+      parseMode: 'HTML',
+      ...(thread === undefined ? {} : { messageThreadId: thread }),
+    }).catch((error) => log('warn', 'models switch receipt', error))
+    return true
+  }
+
   const commandDeps: CommandDeps = {
     ctx,
     config,
@@ -739,6 +807,16 @@ export function apply(ctx: Context, config: Config): void {
     ensureThread,
     flushAll,
     isLive,
+    runningSessions: () => [...liveStatus.entries()].filter(([, status]) => status === 'running').map(([id]) => id),
+    sendModelPicker,
+    answerFreeText: (sessionId, text) => {
+      const pending = answerers.pendingFreeText(sessionId)
+      if (pending === undefined) return false
+      pending.submit(text)
+      return true
+    },
+    deliverPromptText: (sessionId, text) => deliverPrompt(sessionId, [{ type: 'text', text }]),
+    claimSession: (sessionId) => { state.claim(sessionId, myProfile) },
   }
 
   // ── the update loop ─────────────────────────────────────────────────────────
@@ -843,7 +921,11 @@ export function apply(ctx: Context, config: Config): void {
       }
       const threadId = cq.message?.message_thread_id
       const sessionId = threadId !== undefined ? state.sessionOf(threadId) : state.rootSession()
-      await answerers.handleCallback(cq.data ?? '', cq.message?.message_id, cq.id, sessionId ?? '')
+      const payload = cq.data ?? ''
+      const target = sessionId ?? ''
+      // The model picker owns its callbacks before the answerer hub does.
+      if (await handleModelCallback(payload, cq.message?.message_id, cq.id, target)) return
+      await answerers.handleCallback(payload, cq.message?.message_id, cq.id, target)
     }
   }
 

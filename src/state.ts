@@ -180,6 +180,14 @@ export class BridgeState {
     return undefined
   }
 
+  /** Forget a session's thread but keep its title, usage and archived flag. */
+  clearThread(sessionId: string): void {
+    const mapping = this.mapping(sessionId)
+    if (mapping.threadId === undefined) return
+    delete mapping.threadId
+    this.persist()
+  }
+
   /** Whether the session's thread is closed ("archived"). */
   isArchived(sessionId: string): boolean {
     this.load()

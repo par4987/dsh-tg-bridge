@@ -1,6 +1,6 @@
 {
   "name": "dsh-tg-bridge",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Bidirectional Telegram bridge for DeepSeek Harness: one forum thread per session, prompts, live rendering, questions, permissions, media and scheduled tasks — as an installable dsh bundle.",
   "type": "module",
   "license": "MIT",
@@ -46,10 +46,12 @@
     "@deepseek-ai/dsh-agent-default-model": "*",
     "@deepseek-ai/dsh-attachment": "*",
     "@deepseek-ai/dsh-brand": "*",
+    "@deepseek-ai/dsh-compaction": "*",
     "@deepseek-ai/dsh-llm": "*",
     "@deepseek-ai/dsh-schedule": "*",
     "@deepseek-ai/dsh-session": "*",
     "@deepseek-ai/dsh-session-persistence": "*",
+    "@deepseek-ai/dsh-session-title": "*",
     "@deepseek-ai/dsh-user-approval": "*",
     "@deepseek-ai/dsh-user-questions": "*"
   },
@@ -60,10 +62,12 @@
     "@deepseek-ai/dsh-agent-default-model": { "optional": true },
     "@deepseek-ai/dsh-attachment": { "optional": true },
     "@deepseek-ai/dsh-brand": { "optional": true },
+    "@deepseek-ai/dsh-compaction": { "optional": true },
     "@deepseek-ai/dsh-llm": { "optional": true },
     "@deepseek-ai/dsh-schedule": { "optional": true },
     "@deepseek-ai/dsh-session": { "optional": true },
     "@deepseek-ai/dsh-session-persistence": { "optional": true },
+    "@deepseek-ai/dsh-session-title": { "optional": true },
     "@deepseek-ai/dsh-user-approval": { "optional": true },
     "@deepseek-ai/dsh-user-questions": { "optional": true }
   },

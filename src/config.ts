@@ -66,6 +66,8 @@ export interface Config {
   stateDir: string
   /** Working directory recorded for sessions created with `/new`. */
   workspace?: string
+  /** `/rebuild` maps persisted sessions active within this many days. */
+  rebuildDays: number
   /** Which sessions get a thread: every one, or only those already mapped. */
   mirror: 'all' | 'watched'
   /** Idle window that merges consecutive text messages into one prompt. */
@@ -93,6 +95,7 @@ export const Config: Schema<Config> = Schema.object({
   chatId: Schema.number(),
   stateDir: Schema.string().default(join(homedir(), '.dsh-tg-bridge')),
   workspace: Schema.string(),
+  rebuildDays: Schema.number().min(1).max(365).default(7),
   mirror: Schema.union(['all', 'watched'] as const).default('all'),
   coalesceMs: Schema.number().min(200).max(10_000).default(2000),
   coalesceBusyMs: Schema.number().min(2000).max(30_000).default(8000),

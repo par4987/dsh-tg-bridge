@@ -3,14 +3,29 @@
  * do, resolved against the harness services the bridge already holds.
  *
  * Commands act on the session the writing thread belongs to, or on the chat
- * root's target session — the same routing a plain prompt takes.
+ * root's target session — the same routing a plain prompt takes. The
+ * surface mirrors opencode-tg's: commands that exist there keep their name
+ * and intent; where the harness owns a better mechanism (Schedule records,
+ * session/title renames, the compaction seam, agent/request route pins) the
+ * command drives that mechanism instead of a bridge-private imitation.
  */
-import { isAbsolute, resolve } from 'node:path'
+import { writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { basename, isAbsolute, join, resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
+import { brandString } from '@deepseek-ai/dsh-brand'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+// Side-effect type imports: the session-title event the rename appends and
+// the compaction seam /compact drives.
+import type {} from '@deepseek-ai/dsh-session-title'
+import type {} from '@deepseek-ai/dsh-compaction'
+import { ManualCompactionError } from '@deepseek-ai/dsh-compaction'
 import type { Telegram } from './telegram.ts'
 import type { BridgeState } from './state.ts'
 import type { Config } from './config.ts'
+import { lastActiveAt, rebuildCandidates, type RebuildCandidate } from './rebuild.ts'
 import { escapeHtml, shortPath } from './render.ts'
 import { setLocale, t } from './locale.ts'
 import { safe } from './log.ts'
@@ -20,6 +35,12 @@ export interface ResolvedAgent {
   agent?: Agent
   /** Localized reason the session cannot be driven (foreign profile, nothing found). */
   refusal?: string
+}
+
+/** One model route the `/models` picker offers. */
+export interface ModelRoute {
+  provider: string
+  model: string
 }
 
 /** What the command handlers need from the bridge. */
@@ -41,6 +62,23 @@ export interface CommandDeps {
   flushAll: () => number
   /** Whether the live runtime reports the session running. */
   isLive: (sessionId: string) => boolean
+  /** Sessions with a turn in flight in this process. */
+  runningSessions: () => string[]
+  /** Send the `/models` route picker for a session (or the chat root). */
+  sendModelPicker: (sessionId: string | undefined, current: string | undefined, routes: ModelRoute[]) => Promise<void>
+  /** Feed a free-text answer to the armed question; false when none is armed. */
+  answerFreeText: (sessionId: string, text: string) => boolean
+  /** Deliver one text prompt to a session (followup/steer by its status). */
+  deliverPromptText: (sessionId: string, text: string) => Promise<void>
+  /** Tag the session as driven by this profile. */
+  claimSession: (sessionId: string) => void
+}
+
+/** The session-query surface `/rebuild` and `/export` read (base mounts it). */
+interface SessionQueryLike {
+  listSessions(signal?: AbortSignal): Promise<Array<{ header: { id: string, cwd?: string, origin?: string, parentSession?: string } }>>
+  readTitle(sessionId: SessionId, signal?: AbortSignal): Promise<{ title: string } | undefined>
+  readSession(sessionId: SessionId, signal?: AbortSignal): Promise<{ events: ReadonlyArray<unknown> }>
 }
 
 const DOTS = ['\u{1F534}', '\u{1F7E0}', '\u{1F7E1}', '\u{1F7E2}', '\u{1F535}', '\u{1F7E3}', '\u{1F7E4}', '\u{26AB}']
@@ -54,7 +92,7 @@ function dotFor(sessionId: string): string {
 /**
  * Dispatch one command.
  * @returns the HTML reply for the thread, or undefined when the command
- *   needs no answer.
+ *   already answered (or needs no answer).
  */
 export async function handleCommand(
   deps: CommandDeps,
@@ -86,6 +124,57 @@ export async function handleCommand(
       }
     }
 
+    case 'rebuild': {
+      const days = Math.min(Math.max(Number(args.trim()) || deps.config.rebuildDays, 1), 365)
+      const sessionQuery = ctx.get('sessionQuery') as SessionQueryLike | undefined
+      if (sessionQuery === undefined) return t('rebuild_fail', { detail: 'sessionQuery is not mounted' })
+      let roots: RebuildCandidate[]
+      let skipped = 0
+      try {
+        const records = await sessionQuery.listSessions()
+        const unfiltered = records.filter((record) =>
+          record.header.origin !== 'subagent' && record.header.parentSession === undefined)
+        for (const record of unfiltered) {
+          if (state.has(record.header.id)) skipped += 1
+        }
+        roots = unfiltered
+          .filter((record) => !state.has(record.header.id))
+          .map((record) => {
+            const mtime = lastActiveAt(record.header.id)
+            return {
+              id: record.header.id,
+              ...(record.header.cwd === undefined ? {} : { cwd: record.header.cwd }),
+              ...(mtime === undefined ? {} : { mtime }),
+            }
+          })
+      } catch (error) {
+        return t('rebuild_fail', { detail: escapeHtml(safe(error).slice(0, 160)) })
+      }
+      const picked = rebuildCandidates(roots, Date.now(), days)
+      if (picked.length === 0) {
+        return skipped > 0 ? t('rebuild_none') + ` (${skipped})` : t('rebuild_none')
+      }
+      const lines: string[] = [t('rebuild_header', { n: picked.length, days })]
+      for (const candidate of picked) {
+        let title = candidate.id.slice(0, 24)
+        try {
+          title = (await sessionQuery.readTitle(brandString<SessionId>(candidate.id)))?.title ?? title
+        } catch {
+          /* an unreadable title falls back to the id prefix */
+        }
+        if (title === candidate.id.slice(0, 24) && candidate.cwd !== undefined) {
+          title = `${basename(candidate.cwd)} · ${candidate.id.slice(0, 8)}`
+        }
+        state.setTitle(candidate.id, title.slice(0, 60))
+        deps.claimSession(candidate.id)
+        state.touchIdle(candidate.id, candidate.mtime)
+        void deps.ensureThread(candidate.id)
+        lines.push(t('rebuild_entry', { title: escapeHtml(title.slice(0, 48)) }))
+      }
+      if (skipped > 0) lines.push(`(${skipped})`)
+      return lines.join('')
+    }
+
     case 'ls': {
       const entries = state.entries()
       if (entries.length === 0) return t('ls_none')
@@ -100,6 +189,19 @@ export async function handleCommand(
           title: escapeHtml((mapping.title ?? '').slice(0, 40)),
         }))
       return `${t('ls_header', { n: entries.length })}\n${lines.join('\n')}`
+    }
+
+    case 'running': {
+      const running = deps.runningSessions()
+      if (running.length === 0) return t('running_none')
+      const lines = running.map((id) => t('ls_entry', {
+        dot: dotFor(id),
+        id: id.slice(0, 18),
+        live: t('ls_live'),
+        archived: '',
+        title: escapeHtml((state.titleOf(id) ?? '').slice(0, 40)),
+      }))
+      return `${t('running_header', { n: running.length })}\n${lines.join('\n')}`
     }
 
     case 'use': {
@@ -120,22 +222,32 @@ export async function handleCommand(
 
     case 'models': {
       try {
-        const providers = ctx.llm.listProviders()
-        const lines: string[] = [t('models_header')]
-        for (const provider of providers) {
-          const models = await ctx.llm.listModels(provider.id)
-          for (const model of models) {
-            lines.push(t('models_route', { provider: escapeHtml(provider.id), model: escapeHtml(model.id) }))
+        const routes: ModelRoute[] = []
+        for (const provider of ctx.llm.listProviders()) {
+          for (const model of await ctx.llm.listModels(provider.id)) {
+            routes.push({ provider: provider.id, model: model.id })
           }
         }
-        const resolved = targetSession !== undefined ? await deps.resolveAgent(targetSession) : undefined
-        const header = resolved?.agent?.session.requestHeader()
-        if (header !== undefined) {
-          lines.push(t('models_current', {
-            provider: escapeHtml(header.config.provider),
-            model: escapeHtml(header.config.model),
-          }))
+        let current: string | undefined
+        if (targetSession !== undefined) {
+          const resolved = await deps.resolveAgent(targetSession)
+          const header = resolved.agent?.session.requestHeader()
+          if (header !== undefined) {
+            current = t('models_current', {
+              provider: escapeHtml(header.config.provider),
+              model: escapeHtml(header.config.model),
+            })
+          } else if (resolved.refusal !== undefined) {
+            return resolved.refusal
+          }
         }
+        if (targetSession !== undefined) {
+          await deps.sendModelPicker(targetSession, current, routes)
+          return undefined
+        }
+        const lines = [t('models_header'), ...routes.map((route) =>
+          t('models_route', { provider: escapeHtml(route.provider), model: escapeHtml(route.model) }))]
+        if (current !== undefined) lines.push(current)
         return lines.join('')
       } catch (error) {
         return t('models_fail', { detail: escapeHtml(safe(error)) })
@@ -241,13 +353,110 @@ export async function handleCommand(
       return `${t('history_header', { n: tail.length })}\n${lines.join('\n\n')}`
     }
 
+    case 'export': {
+      const id = targetSession
+      if (id === undefined) return t('msg_no_target')
+      const sessionQuery = ctx.get('sessionQuery') as SessionQueryLike | undefined
+      if (sessionQuery === undefined) return t('export_fail', { detail: 'sessionQuery is not mounted' })
+      try {
+        const snapshot = await sessionQuery.readSession(brandString<SessionId>(id))
+        const name = `${id.slice(0, 12)}.jsonl`
+        const path = join(tmpdir(), `tg-export-${Date.now()}-${name}`)
+        writeFileSync(path, snapshot.events.map((event) => JSON.stringify(event)).join('\n') + '\n', 'utf-8')
+        const thread = state.threadOf(id)
+        await deps.telegram.sendDocument(deps.chatId, path, {
+          ...(thread === undefined ? {} : { messageThreadId: thread }),
+        })
+        return t('export_done', { name: escapeHtml(name) })
+      } catch (error) {
+        return t('export_fail', { detail: escapeHtml(safe(error).slice(0, 160)) })
+      }
+    }
+
+    case 'rename': {
+      const title = args.trim()
+      if (title.length === 0) return t('rename_usage')
+      const id = targetSession
+      if (id === undefined) return t('msg_no_target')
+      const resolved = await deps.resolveAgent(id)
+      if (resolved.agent === undefined) return resolved.refusal ?? t('history_none')
+      // The harness's own explicit-rename record: pins the title and stops
+      // automatic scheduling — the web UI reads the same event.
+      resolved.agent.session.append('session/title', {
+        title: title.slice(0, 200),
+        messageSeqs: [],
+        source: { kind: 'user' },
+      })
+      state.setTitle(id, title.slice(0, 60))
+      const thread = state.threadOf(id)
+      if (thread !== undefined) {
+        await deps.telegram.editForumTopic(deps.chatId, thread, title.slice(0, 60))
+      }
+      return t('rename_done', { title: escapeHtml(title.slice(0, 60)) })
+    }
+
+    case 'note': {
+      const text = args.trim()
+      if (text.length === 0) return t('note_usage')
+      const id = targetSession
+      if (id === undefined) return t('msg_no_target')
+      const resolved = await deps.resolveAgent(id)
+      if (resolved.agent === undefined) return resolved.refusal ?? t('history_none')
+      resolved.agent.inject(createUserMessage({
+        content: [{ type: 'text', text }],
+        source: { kind: 'plugin', plugin: 'tg-bridge' },
+      }))
+      state.touchIdle(id)
+      return t('note_added')
+    }
+
+    case 'txt': {
+      const text = args.trim()
+      if (text.length === 0) return t('txt_usage')
+      const id = targetSession
+      if (id === undefined) return t('msg_no_target')
+      if (!deps.answerFreeText(id, text)) return t('txt_none')
+      return t('txt_done', { text: escapeHtml(text.slice(0, 120)) })
+    }
+
+    case 'sh': {
+      const cmd = args.trim()
+      if (cmd.length === 0) return t('sh_usage')
+      const id = targetSession
+      if (id === undefined) return t('msg_no_target')
+      // The harness invariant — model-visible means logged — forbids running
+      // shell outside the agent: the command goes to the agent, which runs
+      // it through its sandboxed shell tool with its permission gates.
+      await deps.deliverPromptText(id, t('sh_frame', { cmd }))
+      state.touchIdle(id)
+      return t('sh_sent')
+    }
+
+    case 'compact': {
+      const id = targetSession
+      if (id === undefined) return t('msg_no_target')
+      const resolved = await deps.resolveAgent(id)
+      if (resolved.agent === undefined) return resolved.refusal ?? t('history_none')
+      try {
+        const result = await ctx.compaction.compactNow(resolved.agent, AbortSignal.timeout(180_000))
+        if (result === null) return t('compact_noop')
+        return t('compact_done', { n: result.shadowedSeqs.length, tokens: result.shadowedTokenCount })
+      } catch (error) {
+        if (error instanceof ManualCompactionError) {
+          return t('compact_fail', { detail: escapeHtml(error.code) })
+        }
+        return t('compact_fail', { detail: escapeHtml(safe(error).slice(0, 160)) })
+      }
+    }
+
     case 'archive': {
       const id = args.trim().length > 0 ? state.sessionByPrefix(args.trim()) : targetSession
       if (id === undefined) return t('archive_usage')
-      const thread = state.threadOf(id)
       state.setArchived(id, true)
-      if (thread !== undefined && thread > 0) {
-        await deps.telegram.closeForumTopic(deps.chatId, thread)
+      const thread = state.threadOf(id)
+      if (thread !== undefined) {
+        await deps.telegram.deleteForumTopic(deps.chatId, thread)
+        state.clearThread(id)
       }
       return t('archive_done')
     }
@@ -256,12 +465,7 @@ export async function handleCommand(
       const id = args.trim().length > 0 ? state.sessionByPrefix(args.trim()) : targetSession
       if (id === undefined) return t('archive_usage')
       state.setArchived(id, false)
-      const thread = state.threadOf(id)
-      if (thread !== undefined && thread > 0) {
-        const reopened = await deps.telegram.reopenForumTopic(deps.chatId, thread).catch(() => false)
-        return reopened ? t('unarchive_done') : t('unarchive_recreated')
-      }
-      void deps.ensureThread(id)
+      await deps.ensureThread(id)
       return t('unarchive_recreated')
     }
 
