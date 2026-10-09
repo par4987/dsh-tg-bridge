@@ -66,7 +66,7 @@ Todo va en el `cordis.patch.yml` del perfil (o del home), sobre el id `tg-bridge
 
 | Campo | Default | Qué hace |
 |---|---|---|
-| `mode` | `dry` | `off` no hace nada; `dry` registra qué enviaría sin tocar Telegram; `live` enciende el poll |
+| `mode` | `off` | `off` monta el bundle inerte (instalación limpia sin configurar); `dry` registra qué enviaría sin tocar Telegram; `live` enciende el poll |
 | `token` | — | Token del bot; si falta, lee `TELEGRAM_BOT_TOKEN` |
 | `allowedUsers` | `[]` | Ids de usuario habilitados; vacío es configuración inválida (falla al cargar) |
 | `chatId` | primer usuario | Chat del foro (en bots privados con topics, tu propio chat) |

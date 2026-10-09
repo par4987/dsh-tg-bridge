@@ -68,7 +68,7 @@ Everything goes into the profile's (or the home's) `cordis.patch.yml`, on the `t
 
 | Field | Default | What it does |
 |---|---|---|
-| `mode` | `dry` | `off` does nothing; `dry` logs what it would send without touching Telegram; `live` starts the poll |
+| `mode` | `off` | `off` mounts the bundle inert (a clean install without configuration); `dry` logs what it would send without touching Telegram; `live` starts the poll |
 | `token` | — | Bot token; falls back to `TELEGRAM_BOT_TOKEN` |
 | `allowedUsers` | `[]` | Enabled user ids; empty is invalid configuration (fails at load) |
 | `chatId` | first user | The forum chat (for private-topic bots, your own chat) |

@@ -50,7 +50,11 @@ export interface SttConfig {
 }
 
 export interface Config {
-  /** `off` does nothing; `dry` logs sends without touching Telegram; `live` runs. */
+  /**
+   * `off` (the default) mounts the bundle inert, so a freshly installed row
+   * in an unconfigured profile stays silent; `dry` validates the wiring and
+   * logs what would be sent without touching Telegram; `live` runs the poll.
+   */
   mode: Mode
   /** Telegram bot token; resolved from the environment when absent here. */
   token: string
@@ -83,7 +87,7 @@ export interface Config {
 }
 
 export const Config: Schema<Config> = Schema.object({
-  mode: Schema.union(['off', 'dry', 'live'] as const).default('dry'),
+  mode: Schema.union(['off', 'dry', 'live'] as const).default('off'),
   token: Schema.string().default(''),
   allowedUsers: Schema.array(Schema.number()).default([]),
   chatId: Schema.number(),
