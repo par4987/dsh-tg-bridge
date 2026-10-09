@@ -25,7 +25,7 @@ import { ManualCompactionError } from '@deepseek-ai/dsh-compaction'
 import type { Telegram } from './telegram.ts'
 import type { BridgeState } from './state.ts'
 import type { Config } from './config.ts'
-import { lastActiveAt, rebuildCandidates, type RebuildCandidate } from './rebuild.ts'
+import { rebuildCandidates, scanSessionActivity, sessionsRoot, type RebuildCandidate } from './rebuild.ts'
 import { escapeHtml, shortPath } from './render.ts'
 import { setLocale, t } from './locale.ts'
 import { safe } from './log.ts'
@@ -137,10 +137,11 @@ export async function handleCommand(
         for (const record of unfiltered) {
           if (state.has(record.header.id)) skipped += 1
         }
+        const activity = scanSessionActivity(sessionsRoot())
         roots = unfiltered
           .filter((record) => !state.has(record.header.id))
           .map((record) => {
-            const mtime = lastActiveAt(record.header.id)
+            const mtime = activity.get(record.header.id)
             return {
               id: record.header.id,
               ...(record.header.cwd === undefined ? {} : { cwd: record.header.cwd }),

@@ -1,6 +1,9 @@
-/** `/rebuild` candidate selection: recency window, ordering, and the cap. */
+/** `/rebuild` selection: recency window, ordering, the cap, and the tree scan. */
+import { mkdirSync, mkdtempSync, statSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { assert, define, type Check } from './harness.ts'
-import { rebuildCandidates } from '../src/rebuild.ts'
+import { rebuildCandidates, scanSessionActivity } from '../src/rebuild.ts'
 
 const DAY = 86_400_000
 
@@ -27,5 +30,33 @@ export const rebuildChecks: Check[] = [
     assert(picked.length === 12, `the cap holds at twelve (got ${picked.length})`)
     assert(picked[0]?.id === 'ses-0', 'the newest comes first')
     assert(picked[11]?.id === 'ses-11', 'the twelfth newest is the last in')
+  }),
+
+  define('the tree scan finds sessions under their cwd grouping', () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-rebuild-'))
+    // The provider's real layout: <root>/<cwd-slug>/<session-id>/session.vN.jsonl
+    const slug = join(root, '--C-work-project--')
+    const a = join(slug, 'session-11111111-2222-3333-4444-555555555555')
+    const b = join(slug, '99999999-8888-7777-6666-555555555555')
+    mkdirSync(a, { recursive: true })
+    mkdirSync(b, { recursive: true })
+    writeFileSync(join(a, 'session.v1.jsonl'), 'old\n')
+    const fresh = join(a, 'session.v2.jsonl')
+    writeFileSync(fresh, 'newer\n')
+    writeFileSync(join(b, 'session.v1.jsonl'), 'other\n')
+    const activity = scanSessionActivity(root)
+    assert(activity.size === 2, `both session directories were found (got ${activity.size})`)
+    const aMtime = activity.get('session-11111111-2222-3333-4444-555555555555')
+    assert(aMtime !== undefined, 'the prefixed session id was recorded')
+    assert(aMtime === statSync(fresh).mtimeMs, 'the newest file inside the session directory wins')
+    assert(activity.has('99999999-8888-7777-6666-555555555555'), 'the bare uuid session id was recorded')
+  }),
+
+  define('the tree scan ignores cwd slugs and empty sessions', () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-rebuild-'))
+    mkdirSync(join(root, '--C-work--'), { recursive: true })
+    mkdirSync(join(root, 'empty-session-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'), { recursive: true })
+    const activity = scanSessionActivity(root)
+    assert(activity.size === 0, `nothing reported activity (got ${activity.size})`)
   }),
 ]

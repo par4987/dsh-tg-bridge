@@ -10,6 +10,8 @@ import { readdirSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
+const SESSION_ID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i
+
 /** A persisted session as `/rebuild` considers it. */
 export interface RebuildCandidate {
   id: string
@@ -26,21 +28,46 @@ export function sessionsRoot(): string {
 }
 
 /**
- * Last real activity for a persisted session: the newest file mtime inside
- * its directory, or undefined when there is nothing to read.
+ * Scan the persisted-session tree for last activity per session.
+ *
+ * The provider lays logs out as `<root>/<cwd-slug>/<session-id>/session.vN.jsonl[.zstd]` —
+ * a cwd grouping level sits above the session directories, so a session's
+ * directory cannot be addressed by id alone. Walk the tree instead and record
+ * the newest file mtime inside every directory whose name carries a session
+ * id (both bare uuid and `session-<uuid>` forms match).
+ * @param root - the persisted-session root (`dshHomePath('sessions')`).
+ * @returns session id → newest file mtime inside its directory.
  */
-export function lastActiveAt(sessionId: string): number | undefined {
-  try {
-    const dir = join(sessionsRoot(), sessionId)
-    let newest = 0
-    for (const entry of readdirSync(dir)) {
-      const mtime = statSync(join(dir, entry)).mtimeMs
-      if (mtime > newest) newest = mtime
+export function scanSessionActivity(root: string): Map<string, number> {
+  const activity = new Map<string, number>()
+  const walk = (dir: string, depth: number): void => {
+    let entries: ReadonlyArray<import('node:fs').Dirent>
+    try {
+      entries = readdirSync(dir, { withFileTypes: true })
+    } catch {
+      return
     }
-    return newest > 0 ? newest : undefined
-  } catch {
-    return undefined
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      const child = join(dir, entry.name)
+      if (SESSION_ID.test(entry.name)) {
+        let newest = 0
+        try {
+          for (const file of readdirSync(child)) {
+            const mtime = statSync(join(child, file)).mtimeMs
+            if (mtime > newest) newest = mtime
+          }
+        } catch {
+          /* an unreadable session directory simply reports no activity */
+        }
+        if (newest > 0) activity.set(entry.name, newest)
+      } else if (depth < 2) {
+        walk(child, depth + 1)
+      }
+    }
   }
+  walk(root, 0)
+  return activity
 }
 
 /**
