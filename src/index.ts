@@ -23,12 +23,14 @@ import { randomUUID } from 'node:crypto'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
-// Side-effect type imports: declaration-merge the waterfalls answered below.
+// Side-effect type imports: declaration-merge the waterfalls answered below
+// and the default-model service the bridge reads.
+import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-user-approval'
 import type {} from '@deepseek-ai/dsh-user-questions'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import { createUserMessage, expandAssistantStream, type ContentBlock } from '@deepseek-ai/dsh-llm'
-import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
+import type { Agent, AgentHandle, AgentOptions, ModelSelection } from '@deepseek-ai/dsh-agent'
 import type { SessionId, Session } from '@deepseek-ai/dsh-session'
 import { AttachmentStore, type FileAttachmentRef, type SaveImageAttachment } from '@deepseek-ai/dsh-attachment'
 // Side-effect type import: declares ctx.sessionPersistence for the injected service.
@@ -52,10 +54,11 @@ import { safe, type LogFn } from './log.ts'
 export const name = 'tg-bridge'
 /**
  * Core services every base-backed profile composes; the timer plugin owns the
- * election interval's cleanup. Headless disposes the tree before exit, so
- * the poll's disposer settles on the way out.
+ * election interval's cleanup and agent-default-model supplies the route for
+ * bridge-created sessions. Headless disposes the tree before exit, so the
+ * poll's disposer settles on the way out.
  */
-export const inject = ['agents', 'llm', 'sessionPersistence', 'sessions', 'timer']
+export const inject = ['agentDefaultModel', 'agents', 'llm', 'sessionPersistence', 'sessions', 'timer']
 export { Config }
 
 const REASONING_PREFIX = '💭 '
@@ -138,6 +141,21 @@ export function apply(ctx: Context, config: Config): void {
     watched(sessionId) ? state.threadOf(sessionId) : undefined
   const titleOf = (sessionId: string): string => (state.titleOf(sessionId) ?? '').trim() || t('no_title')
 
+  /**
+   * The default model route for agents the bridge creates or resumes — the
+   * same selection every entry point reads. The loop prefers a logged
+   * request header from the second request on, so this fills only sessions
+   * that never picked a route.
+   */
+  function defaultAgentOptions(): AgentOptions {
+    const selection: ModelSelection = ctx.agentDefaultModel.currentSelection()
+    return {
+      provider: selection.provider,
+      model: selection.model,
+      ...selection.reasoningEffort !== undefined ? { reasoningEffort: selection.reasoningEffort } : {},
+    }
+  }
+
   /** Message ids this bridge queued itself — their events need no receipt echo. */
   const queuedIds = new Set<string>()
 
@@ -156,7 +174,10 @@ export function apply(ctx: Context, config: Config): void {
       const stat = await ctx.sessionPersistence.stat(id)
       if (stat === undefined) return undefined
       if (stat.header.origin === 'subagent') return undefined
-      const handle = await ctx.agents.resume({ resumeSessionId: id })
+      const handle = await ctx.agents.resume({
+        resumeSessionId: id,
+        agentOptions: defaultAgentOptions(),
+      })
       owned.set(sessionId, handle)
       liveStatus.set(sessionId, 'idle')
       return handle.agent
@@ -169,7 +190,11 @@ export function apply(ctx: Context, config: Config): void {
   /** Create a fresh root session the bridge owns, in a working directory. */
   async function createSession(cwd: string): Promise<string> {
     const sessionId = brandString<SessionId>(randomUUID())
-    const handle = await ctx.agents.create({ sessionId, meta: { cwd } })
+    const handle = await ctx.agents.create({
+      sessionId,
+      meta: { cwd },
+      agentOptions: defaultAgentOptions(),
+    })
     owned.set(sessionId, handle)
     liveStatus.set(sessionId, 'idle')
     state.touchIdle(sessionId)

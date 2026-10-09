@@ -35,6 +35,7 @@
       "@deepseek-ai/dsh-session": ["C:/Users/pablo/mcp-servers/deepseek-harness/packages/core/session/lib/types/index.d.ts"],
       "@deepseek-ai/dsh-session-persistence": ["C:/Users/pablo/mcp-servers/deepseek-harness/packages/session/session-persistence/lib/types/index.d.ts"],
       "@deepseek-ai/dsh-agent": ["C:/Users/pablo/mcp-servers/deepseek-harness/packages/core/agent/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-agent-default-model": ["C:/Users/pablo/mcp-servers/deepseek-harness/packages/core/agent-default-model/lib/types/index.d.ts"],
       "@deepseek-ai/dsh-attachment": ["C:/Users/pablo/mcp-servers/deepseek-harness/packages/attachment/attachment/lib/types/index.d.ts"],
       "@deepseek-ai/dsh-user-approval": ["C:/Users/pablo/mcp-servers/deepseek-harness/packages/interaction/user-approval/lib/types/index.d.ts"],
       "@deepseek-ai/dsh-user-approval/types": ["C:/Users/pablo/mcp-servers/deepseek-harness/packages/interaction/user-approval/lib/types/types.d.ts"],
