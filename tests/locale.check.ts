@@ -24,7 +24,13 @@ export const localeChecks: Check[] = [
     // invariant that matters is reachable: switching must never produce a
     // Spanish string for an English reader. Sample a representative set.
     setLocale('en')
-    const probes = ['turn_aborted', 'approval_allow', 'question_confirm', 'ls_none', 'newtask_name', 'media_photo']
+    const probes = [
+      'turn_aborted', 'approval_allow', 'question_confirm', 'ls_none', 'newtask_name', 'media_photo',
+      'send_done', 'sessions_header', 'projects_created', 'context_hint', 'clearqueue_done',
+      'commands_ok', 'perms_done', 'skills_detail', 'skill_frame', 'agents_selected',
+      'menu_header', 'status_leader', 'delthread_done', 'taskcancel_none', 'files_dir',
+      'files_too_big', 'ffind_none',
+    ]
     for (const key of probes) {
       const value = t(key)
       assert(value !== key, `the English catalog covers ${key}`)

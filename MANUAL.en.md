@@ -89,6 +89,54 @@ Manual history compaction through the official seam (`ctx.compaction.compactNow`
 ### `/txt <text>`
 Answers with free text the question waiting for it (same as tapping "✍️ Other" and typing).
 
+### `/menu`
+Button hub: running sessions, projects, models, usage, context, skills, tasks, queue, and help — one tap each. The menu stays; the reply arrives as a new message.
+
+### `/sessions`
+The profile's full corpus of root sessions — not just the mapped ones: the ones the bot already mirrors first (ordered by activity), then the ones living only on disk, with their titles. `/use` or `/rebuild` brings any of them.
+
+### `/projects`
+The harness's registered workspaces, most recent first. Each carries a "＋" button that opens a session there — the phone way of "start working on that folder".
+
+### `/send <id|prefix> <text>`
+Talks to another session without moving the chat root: resolves the id (or prefix) and delivers the text as a prompt — followup or steering depending on whether it is running.
+
+### `/context`
+Window occupancy: tokens used against the model's context, percentage, how many compactions the session ran, and the last summary. Past the half, it suggests `/compact`.
+
+### `/usage`
+The session's snapshot of right now: model route, state (running/idle), last-turn and accumulated tokens, context occupancy.
+
+### `/clearqueue`
+Empties the session's inbox (`agent.inbox.clear()`): every message waiting for the next turn and every steering waiting for the next step is cancelled, durably.
+
+### `/commands [run <name> [args]]`
+The commands the harness registered for the session (the profile's own, without a model in between). The list carries one button per command; with arguments, `/commands run <name> …`. The `command/run` → `command/done` cycle lands in the log, same as the Web.
+
+### `/perms`
+The session's permission state: current preset (permission presets), approval policy, sandbox mode — with one button per preset to switch them together. It answers "what will the agent ask about", not "what did I pre-approve" (the harness decides per call; there is no saved-rule list).
+
+### `/skills` · `/skill <name> [text]`
+`/skills` lists the skills visible to the session's folder, with a button to read one in full. `/skill <name> <text>` hands the agent the skill's content framed as instruction, with your request.
+
+### `/agents`
+The profile's agent presets. One tap recomposes the session with that preset (reuses the harness's `agentPresets.select`; refuses sessions that already produced output, same as the Web).
+
+### `/files [path]`
+File browser for the session's folder: directories first, with buttons to navigate (and "⬆" to climb); tapping a file sends it as a document (up to 256 KB). Without an argument, it opens the session's folder.
+
+### `/ffind <text>`
+Finds files by name from the session's folder — case-insensitive, up to 4 levels, skipping `node_modules`, `.git`, and build output; shows each hit's full path.
+
+### `/taskcancel [id|text]`
+Deletes one of the session's reminders by id, prefix, or a chunk of its prompt; with no argument, the last one. Records the `schedule/change` delete the way the official tool does.
+
+### `/delthread`
+Deletes the Telegram thread but keeps the mapping: the session stays alive and its thread is reborn on the next event (unlike `/archive`, which also mutes it until you write).
+
+### `/status`
+The bot's self-report: mode, profile, poll leadership, mapped and running sessions, chat root.
+
 ## Questions and permissions
 
 When the agent asks for a decision — the `ask_user_question` tool, or a permission the profile's policy marks `ask` — the thread gets a card with buttons:

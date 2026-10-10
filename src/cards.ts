@@ -32,3 +32,12 @@ export class MessageCards<T> {
     if (messageId !== undefined) this.map.delete(messageId)
   }
 }
+
+/** Lay buttons out `perRow` to a side; the last row keeps whatever is left. */
+export function chunkButtons<T>(buttons: ReadonlyArray<T>, perRow: number): T[][] {
+  const rows: T[][] = []
+  for (let i = 0; i < buttons.length; i += perRow) {
+    rows.push(buttons.slice(i, i + perRow) as T[])
+  }
+  return rows
+}

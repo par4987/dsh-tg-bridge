@@ -87,6 +87,54 @@ Compresión manual del historial vía el seam oficial (`ctx.compaction.compactNo
 ### `/txt <texto>`
 Responde con texto libre la pregunta que espera texto (lo mismo que tocar "✍️ Otra" y escribir).
 
+### `/menu`
+Tablero de botones: correr sesiones, proyectos, modelos, uso, contexto, skills, tareas, cola y ayuda con un toque. El menú queda; la respuesta llega como mensaje nuevo.
+
+### `/sessions`
+El corpus completo de sesiones raíz del perfil — no solo las mapeadas: primero las que el bot ya espeja (ordenadas por actividad), después las que viven solo en disco, con su título. `/use` o `/rebuild` traen cualquiera.
+
+### `/projects`
+Los workspaces registrados del harness, el más reciente primero. Cada uno tiene un botón "＋" que crea una sesión ahí — la manera de telefoneo de "empezar a trabajar en tal carpeta".
+
+### `/send <id|prefijo> <texto>`
+Le habla a otra sesión sin mover la raíz del chat: resuelve el id (o prefijo) y entrega el texto como prompt, con followup o steering según esté corriendo o no.
+
+### `/context`
+Ocupación de la ventana: tokens usados contra el contexto del modelo, porcentaje, cuántas compactaciones hizo la sesión y el último resumen. Pasada la mitad, sugiere `/compact`.
+
+### `/usage`
+La foto del momento de la sesión: ruta de modelo, estado (corriendo/en pausa), tokens del último turno y acumulados, ocupación del contexto.
+
+### `/clearqueue`
+Vacia el inbox de la sesión (`agent.inbox.clear()`): todo mensaje en espera de próximo turno y todo steering en espera de próximo paso se cancela, en forma durable.
+
+### `/commands [run <nombre> [args]]`
+Los comandos que el harness registró para la sesión (los del perfil, sin pasar por el modelo). La lista trae un botón por comando; con argumentos, `/commands run <nombre> …`. El ciclo `command/run` → `command/done` queda en el log, como en la Web.
+
+### `/perms`
+El estado de permisos de la sesión: preset actual (permission presets), política de aprobación, modo de sandbox — con un botón por preset para cambiar todo junto. Es "qué pedirá el agente", no "qué pre-aprobé" (el harness decide cada llamado; no hay lista de reglas guardadas).
+
+### `/skills` · `/skill <nombre> [texto]`
+`/skills` lista las skills visibles para la carpeta de la sesión, con botón para leer una completa. `/skill <nombre> <texto>` le entrega al agente el contenido de la skill enmarcado como instrucción, con tu pedido.
+
+### `/agents`
+Los presets de agente del perfil. Un toque recompone la sesión con ese preset (reusa el `agentPresets.select` del harness; rechaza sesiones que ya produjeron salida, igual que la Web).
+
+### `/files [ruta]`
+Explorador de archivos de la carpeta de la sesión: carpetas primero, con botones para navegar (y "⬆" para subir); tocar un archivo lo manda como documento (hasta 256 KB). Sin argumento, abre la carpeta de la sesión.
+
+### `/ffind <texto>`
+Busca archivos por nombre desde la carpeta de la sesión — insensible a mayúsculas, hasta 4 niveles, saltándose `node_modules`, `.git` y build output; muestra la ruta completa de cada hallazgo.
+
+### `/taskcancel [id|texto]`
+Borra un recordatorio de la sesión por id, prefijo, o un trozo de su prompt; sin argumento, cancela el último. Registra el `schedule/change` delete como la tool oficial.
+
+### `/delthread`
+Borra el hilo de Telegram pero deja el mapeo: la sesión sigue viva y su hilo renace con el próximo evento (distinto de `/archive`, que además la silencia hasta que le escribas).
+
+### `/status`
+Auto-reporte del bot: modo, perfil, si lidera el poll, sesiones mapeadas y corriendo, raíz del chat.
+
 ## Preguntas y permisos
 
 Cuando el agente pide una decisión — la tool `ask_user_question`, o un permiso que la política del perfil marca `ask` — el hilo recibe una tarjeta con botones:

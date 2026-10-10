@@ -38,12 +38,15 @@ import type {} from '@deepseek-ai/dsh-session-persistence'
 // Side-effect type import: declares ctx.setInterval (the timer plugin base composes).
 import type {} from '@deepseek-ai/cordis-plugin-timer'
 import { Telegram, DryRunTelegram, type Update } from './telegram.ts'
-import { MessageCards } from './cards.ts'
+import { MessageCards, chunkButtons } from './cards.ts'
 import { Config, requireChatId, resolveToken } from './config.ts'
 import { BridgeState } from './state.ts'
 import { TurnRenderer } from './stream.ts'
 import { AnswererHub } from './answerers.ts'
-import { handleCommand, feedWizard, type CommandDeps, type ResolvedAgent } from './commands.ts'
+import {
+  handleCommand, handleCardCallback, feedWizard,
+  type CardButton, type CardPayload, type CommandDeps, type ResolvedAgent,
+} from './commands.ts'
 import { acquireLock, beatProfile, clearProfileBeat, heartbeat, isElsewhereLive, releaseLock, LOCK_INTERVAL_MS } from './ownership.ts'
 import { downloadsDir, decodeText, isTextLike, saveBinary, DOC_MAX_CHARS } from './ingest.ts'
 import { sttAvailable, transcribeFile } from './stt.ts'
@@ -817,6 +820,35 @@ export function apply(ctx: Context, config: Config): void {
     return true
   }
 
+  /** State bound to each button card the bridge drew, addressed by its message. */
+  const cardRegistry = new MessageCards<CardPayload>(20)
+
+  /** The inline keyboard one card's buttons lay out. */
+  const cardKeyboard = (buttons: ReadonlyArray<CardButton>): Record<string, unknown> => ({
+    inline_keyboard: chunkButtons(buttons, 2).map((row) =>
+      row.map((button) => ({ text: button.text, callback_data: button.callback }))),
+  })
+
+  /** Send one button card into a session's thread and bind its state to the message. */
+  async function sendCard(sessionId: string | undefined, text: string, payload: CardPayload): Promise<void> {
+    const thread = sessionId !== undefined ? state.threadOf(sessionId) : undefined
+    const messageId = await telegram.sendMessage(chatId, text, {
+      parseMode: 'HTML',
+      ...(thread === undefined ? {} : { messageThreadId: thread }),
+      replyMarkup: cardKeyboard(payload.buttons),
+    })
+    if (messageId !== null) cardRegistry.set(messageId, payload)
+  }
+
+  /** Replace one card's message wholesale: new text, new buttons, new bound state. */
+  async function rebindCard(messageId: number, text: string, payload: CardPayload): Promise<void> {
+    await telegram.editMessageText(chatId, messageId, text, {
+      parseMode: 'HTML',
+      replyMarkup: cardKeyboard(payload.buttons),
+    }).catch(() => undefined)
+    cardRegistry.set(messageId, payload)
+  }
+
   const commandDeps: CommandDeps = {
     ctx,
     config,
@@ -839,6 +871,24 @@ export function apply(ctx: Context, config: Config): void {
     },
     deliverPromptText: (sessionId, text) => deliverPrompt(sessionId, [{ type: 'text', text }]),
     claimSession: (sessionId) => { state.claim(sessionId, myProfile) },
+    sessionCwd: async (sessionId) => {
+      try {
+        const stat = await ctx.sessionPersistence.stat(brandString<SessionId>(sessionId))
+        return stat?.header.cwd
+      } catch {
+        return undefined
+      }
+    },
+    sendText: (sessionId, html) => send(sessionId, html),
+    sendCard,
+    rebindCard,
+    bridgeStatus: () => ({
+      mode: config.mode,
+      leading,
+      profile: myProfile,
+      mapped: state.size(),
+      running: [...liveStatus.values()].filter((status) => status === 'running').length,
+    }),
   }
 
   // ── the update loop ─────────────────────────────────────────────────────────
@@ -946,8 +996,10 @@ export function apply(ctx: Context, config: Config): void {
       const sessionId = threadId !== undefined ? state.sessionOf(threadId) : state.rootSession()
       const payload = cq.data ?? ''
       const target = sessionId ?? ''
-      // The model picker owns its callbacks before the answerer hub does.
+      // The model picker owns its callbacks before cards and the answerer hub do.
       if (await handleModelCallback(payload, cq.message?.message_id, cq.id, target)) return
+      const card = cardRegistry.get(cq.message?.message_id)
+      if (card !== undefined && await handleCardCallback(commandDeps, payload, card, cq.message?.message_id, cq.id, target)) return
       await answerers.handleCallback(payload, cq.message?.message_id, cq.id, target)
     }
   }
@@ -962,16 +1014,33 @@ export function apply(ctx: Context, config: Config): void {
   async function publishCommands(): Promise<void> {
     await telegram.setCommandsEverywhere([
       { command: 'help', description: 'Command list' },
+      { command: 'menu', description: 'Button hub' },
       { command: 'new', description: 'New session' },
       { command: 'ls', description: 'List sessions' },
+      { command: 'sessions', description: 'All root sessions' },
+      { command: 'projects', description: 'Workspaces' },
+      { command: 'send', description: 'Message another session' },
       { command: 'use', description: 'Point the chat root at a session' },
       { command: 'models', description: 'Model routes' },
+      { command: 'usage', description: 'Session now' },
       { command: 'usagestats', description: 'Session token usage' },
+      { command: 'context', description: 'Context occupancy' },
       { command: 'queue', description: 'Session inbox' },
+      { command: 'clearqueue', description: 'Empty the inbox' },
+      { command: 'commands', description: 'Harness commands' },
+      { command: 'perms', description: 'Permissions' },
+      { command: 'skills', description: 'Skills' },
+      { command: 'skill', description: 'Apply a skill' },
+      { command: 'agents', description: 'Agent presets' },
+      { command: 'files', description: 'Browse files' },
+      { command: 'ffind', description: 'Find files' },
       { command: 'tasks', description: 'Session reminders' },
       { command: 'newtask', description: 'Reminder wizard' },
+      { command: 'taskcancel', description: 'Delete a reminder' },
       { command: 'archive', description: 'Delete this thread' },
       { command: 'unarchive', description: 'Recreate this thread' },
+      { command: 'delthread', description: 'Delete the thread only' },
+      { command: 'status', description: 'Bot status' },
       { command: 'locale', description: 'Interface language' },
     ], [chatId]).catch((error) => log('warn', 'setMyCommands', error))
   }

@@ -11,7 +11,7 @@
  */
 import { writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, isAbsolute, join, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
@@ -26,6 +26,8 @@ import type { Telegram } from './telegram.ts'
 import type { BridgeState } from './state.ts'
 import type { Config } from './config.ts'
 import { rebuildCandidates, scanSessionActivity, sessionsRoot, type RebuildCandidate } from './rebuild.ts'
+import { type FileSystemLike, type FsTargetLike, findEntries } from './fsbrowse.ts'
+import { matchScheduleRecord } from './schedmatch.ts'
 import { escapeHtml, shortPath } from './render.ts'
 import { setLocale, t } from './locale.ts'
 import { safe } from './log.ts'
@@ -42,6 +44,34 @@ export interface ModelRoute {
   provider: string
   model: string
 }
+
+/** One button of a card: its label and the callback payload a tap sends back. */
+export interface CardButton {
+  text: string
+  callback: string
+}
+
+/** One entry the `/files` browser shows: its name, its kind, and the target that continues navigation or reads it. */
+export interface FsCardEntry {
+  name: string
+  type: 'file' | 'directory' | 'other'
+  size?: number
+  target: FsTargetLike
+}
+
+/**
+ * State bound to one card's message: what its buttons mean. A tap only ever
+ * addresses the card it lives in, so every variant carries the data its own
+ * callbacks index into, plus the buttons to redraw after a rebind.
+ */
+export type CardPayload =
+  | { kind: 'menu', buttons: CardButton[] }
+  | { kind: 'projects', buttons: CardButton[], paths: string[] }
+  | { kind: 'skills', buttons: CardButton[], names: string[], cwd: string }
+  | { kind: 'agents', buttons: CardButton[], ids: string[] }
+  | { kind: 'perms', buttons: CardButton[], values: string[] }
+  | { kind: 'commands', buttons: CardButton[], lines: string[] }
+  | { kind: 'files', buttons: CardButton[], entries: FsCardEntry[] }
 
 /** What the command handlers need from the bridge. */
 export interface CommandDeps {
@@ -72,6 +102,16 @@ export interface CommandDeps {
   deliverPromptText: (sessionId: string, text: string) => Promise<void>
   /** Tag the session as driven by this profile. */
   claimSession: (sessionId: string) => void
+  /** The session's creation working directory, from its persisted header. */
+  sessionCwd: (sessionId: string) => Promise<string | undefined>
+  /** Send one text message into a session's thread (or the chat root). */
+  sendText: (sessionId: string | undefined, html: string) => Promise<void>
+  /** Send one button card and bind its state to the message that carries it. */
+  sendCard: (sessionId: string | undefined, text: string, payload: CardPayload) => Promise<void>
+  /** Replace one card's message: new text, new buttons, new bound state. */
+  rebindCard: (messageId: number, text: string, payload: CardPayload) => Promise<void>
+  /** Bridge self-report for `/status`. */
+  bridgeStatus: () => { mode: string, leading: boolean, profile: string, mapped: number, running: number }
 }
 
 /** The session-query surface `/rebuild` and `/export` read (base mounts it). */
@@ -79,6 +119,41 @@ interface SessionQueryLike {
   listSessions(signal?: AbortSignal): Promise<Array<{ header: { id: string, cwd?: string, origin?: string, parentSession?: string } }>>
   readTitle(sessionId: SessionId, signal?: AbortSignal): Promise<{ title: string } | undefined>
   readSession(sessionId: SessionId, signal?: AbortSignal): Promise<{ events: ReadonlyArray<unknown> }>
+}
+
+/** The workspace-registry surface `/projects` reads. */
+interface WorkspaceRegistryLike {
+  list(): Array<{ path: string, title: string, sessionIds: ReadonlyArray<string>, updatedAt: string }>
+}
+
+/** The commands surface `/commands` lists and runs. */
+interface CommandsLike {
+  list(agent: unknown): ReadonlyArray<{ name: string, description: string }>
+  execute(
+    agent: unknown,
+    line: string,
+    submittedAttachments: ReadonlyArray<never>,
+    signal: AbortSignal,
+  ): Promise<{ result: { kind: 'success', text?: string } | { kind: 'error', text: string } } | undefined>
+}
+
+/** The permission-preset surface `/perms` reads and one-tap buttons apply. */
+interface PermissionPresetsLike {
+  catalog(): { options: ReadonlyArray<{ value: string, name: string, description?: string }> }
+  current(session: unknown): string
+  set(session: unknown, name: string): void
+}
+
+/** The skill-registry surface `/skills` and `/skill` read. */
+interface SkillsLike {
+  list(options?: { cwd?: string }): Promise<ReadonlyArray<{ name: string, description: string, whenToUse?: string }>>
+  get(name: string, options?: { cwd?: string }): Promise<{ name: string, description: string, whenToUse?: string, content: string } | undefined>
+}
+
+/** The agent-preset surface `/agents` lists and one-tap buttons select. */
+interface AgentPresetsLike {
+  list(): Promise<ReadonlyArray<{ id: string, name?: string, description?: string }>>
+  select(agent: unknown, agentPreset: string): Promise<string>
 }
 
 const DOTS = ['\u{1F534}', '\u{1F7E0}', '\u{1F7E1}', '\u{1F7E2}', '\u{1F535}', '\u{1F7E3}', '\u{1F7E4}', '\u{26AB}']
@@ -491,6 +566,410 @@ export async function handleCommand(
       return startWizard(id, args.trim())
     }
 
+    case 'taskcancel': {
+      const id = targetSession
+      if (id === undefined) return t('msg_no_target')
+      const schedule = await importSchedule()
+      if (schedule === undefined) return t('tasks_unavailable')
+      const resolved = await deps.resolveAgent(id)
+      if (resolved.agent === undefined) return resolved.refusal ?? t('tasks_none')
+      await ctx.sessions.flush(resolved.agent.session)
+      const folded = schedule.foldScheduleEvents(resolved.agent.session.snapshotEvents())
+      const record = matchScheduleRecord(folded.active, args.trim())
+      if (record === undefined) return t('taskcancel_none', { query: escapeHtml(args.trim()) })
+      resolved.agent.session.append('schedule/change', {
+        version: 1,
+        operation: 'delete',
+        id: record.id,
+      })
+      await ctx.sessions.flush(resolved.agent.session)
+      return t('task_deleted')
+    }
+
+    case 'send': {
+      const trimmed = args.trim()
+      const space = trimmed.indexOf(' ')
+      const prefix = space === -1 ? trimmed : trimmed.slice(0, space)
+      const text = space === -1 ? '' : trimmed.slice(space + 1).trim()
+      if (prefix.length === 0 || text.length === 0) return t('send_usage')
+      const id = state.sessionByPrefix(prefix)
+      if (id === undefined) return t('use_not_found')
+      await deps.deliverPromptText(id, text)
+      state.touchIdle(id)
+      return t('send_done', { id: id.slice(0, 18), text: escapeHtml(text.slice(0, 90)) })
+    }
+
+    case 'sessions': {
+      const sessionQuery = ctx.get('sessionQuery') as SessionQueryLike | undefined
+      if (sessionQuery === undefined) return t('rebuild_fail', { detail: 'sessionQuery is not mounted' })
+      let records: Array<{ header: { id: string } }>
+      try {
+        records = (await sessionQuery.listSessions())
+          .filter((record) => record.header.origin !== 'subagent' && record.header.parentSession === undefined)
+      } catch (error) {
+        return t('rebuild_fail', { detail: escapeHtml(safe(error).slice(0, 160)) })
+      }
+      if (records.length === 0) return t('sessions_none')
+      const liveIds = new Set(ctx.agents.list().map((agent): string => agent.session.id))
+      const rowOf = (id: string, mapping: { archived?: boolean, title?: string } | undefined) => t('ls_entry', {
+        dot: dotFor(id),
+        id: id.slice(0, 18),
+        live: liveIds.has(id) ? t('ls_live') : '',
+        archived: mapping?.archived === true ? t('ls_archived') : '',
+        title: escapeHtml((mapping?.title ?? '').slice(0, 40)),
+      })
+      const mapped = state.entries().sort((a, b) => (b[1].lastIdle ?? 0) - (a[1].lastIdle ?? 0)).slice(0, 15)
+        .map(([id, mapping]) => rowOf(id, mapping))
+      const rest: string[] = []
+      for (const record of records) {
+        if (rest.length >= 10) break
+        if (state.has(record.header.id)) continue
+        let title = ''
+        try {
+          title = (await sessionQuery.readTitle(brandString<SessionId>(record.header.id)))?.title.slice(0, 40) ?? ''
+        } catch {
+          /* an unreadable title stays blank; the id row still answers */
+        }
+        rest.push(rowOf(record.header.id, { title }))
+      }
+      const lines = [t('sessions_header', { total: records.length })]
+      if (mapped.length > 0) lines.push(t('sessions_mapped', { n: mapped.length }), ...mapped)
+      if (rest.length > 0) lines.push(t('sessions_rest', { n: records.length - state.size() }), ...rest)
+      return lines.join('\n')
+    }
+
+    case 'projects': {
+      const registry = ctx.get('workspaceRegistry') as WorkspaceRegistryLike | undefined
+      if (registry === undefined) return t('projects_unavailable')
+      const workspaces = [...registry.list()]
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+        .slice(0, 12)
+      if (workspaces.length === 0) return t('projects_none')
+      const lines = workspaces.map((workspace) => t('projects_entry', {
+        title: escapeHtml(workspace.title.slice(0, 40)),
+        n: workspace.sessionIds.length,
+        path: escapeHtml(shortPath(workspace.path, 44)),
+      }))
+      const buttons = workspaces.map((workspace, index) => ({
+        text: `＋ ${workspace.title}`.slice(0, 60),
+        callback: `p:${index}`,
+      }))
+      await deps.sendCard(targetSession, `${t('projects_header', { n: workspaces.length })}${lines.join('')}\n${t('projects_pick')}`, {
+        kind: 'projects',
+        buttons,
+        paths: workspaces.map((workspace) => workspace.path),
+      })
+      return undefined
+    }
+
+    case 'context': {
+      const id = targetSession
+      if (id === undefined) return t('msg_no_target')
+      const meter = ctx.get('tokenMeter') as { measure: (session: unknown) => { totalTokens: number } } | undefined
+      if (meter === undefined) return t('context_unavailable')
+      const resolved = await deps.resolveAgent(id)
+      if (resolved.agent === undefined) return resolved.refusal ?? t('history_none')
+      const used = meter.measure(resolved.agent.session).totalTokens
+      const window = resolved.agent.session.requestContext()?.contextWindow
+      const compactions = resolved.agent.session.snapshotEvents()
+        .filter((event) => event.type === 'compaction/summary')
+      const lines = [t('context_header', { label: escapeHtml(label(id)) })]
+      lines.push(t('context_tokens', {
+        used,
+        size: window ?? '?',
+        pct: window === undefined ? '' : t('context_pct', { pct: Math.round((used / window) * 100) }),
+      }))
+      if (compactions.length > 0) {
+        lines.push(t('context_compactions', { n: compactions.length }))
+        const last = compactions[compactions.length - 1]
+        if (last !== undefined) {
+          const summaryText = last.data.summary
+            .filter((block): block is { type: 'text', text: string } => block.type === 'text')
+            .map((block) => block.text)
+            .join('')
+          lines.push(t('context_last_summary', { summary: escapeHtml(summaryText.slice(0, 220)) }))
+        }
+      }
+      if (window !== undefined && used > window * 0.5) lines.push(t('context_hint'))
+      return lines.join('')
+    }
+
+    case 'clearqueue': {
+      const id = targetSession
+      if (id === undefined) return t('msg_no_target')
+      const resolved = await deps.resolveAgent(id)
+      if (resolved.agent === undefined) return resolved.refusal ?? t('queue_none')
+      resolved.agent.inbox.clear()
+      return t('clearqueue_done')
+    }
+
+    case 'usage': {
+      const id = targetSession
+      if (id === undefined) return t('msg_no_target')
+      const resolved = await deps.resolveAgent(id)
+      if (resolved.agent === undefined) return resolved.refusal ?? t('usage_none')
+      const agent = resolved.agent
+      const header = agent.session.requestHeader()
+      const parts: string[] = [t('usage_now_header', { label: escapeHtml(label(id)) })]
+      if (header !== undefined) {
+        parts.push(t('usage_route', { provider: escapeHtml(header.config.provider), model: escapeHtml(header.config.model) }))
+      }
+      parts.push(t('usage_status', {
+        status: agent.status === 'running' ? t('usage_running') : t('usage_idle'),
+      }))
+      const usage = state.usageOf(id)
+      if (usage.total !== undefined) {
+        parts.push(t('usage_total', {
+          in: usage.total.inputTokens,
+          out: usage.total.outputTokens,
+          total: usage.total.totalTokens,
+        }))
+      }
+      if (usage.last !== undefined) {
+        parts.push(t('usage_last', {
+          in: usage.last.inputTokens,
+          out: usage.last.outputTokens,
+          total: usage.last.totalTokens,
+        }))
+      }
+      try {
+        const meter = ctx.get('tokenMeter') as { measure: (session: unknown) => { totalTokens: number } } | undefined
+        const window = agent.session.requestContext()?.contextWindow
+        if (meter !== undefined) {
+          parts.push(t('usage_ctx', { used: meter.measure(agent.session).totalTokens, size: window ?? '?' }))
+        }
+      } catch {
+        /* occupancy is a nicety; totals still answer the command */
+      }
+      return parts.join('')
+    }
+
+    case 'commands': {
+      const id = targetSession
+      if (id === undefined) return t('msg_no_target')
+      const commands = ctx.get('commands') as CommandsLike | undefined
+      if (commands === undefined) return t('commands_unavailable')
+      const resolved = await deps.resolveAgent(id)
+      if (resolved.agent === undefined) return resolved.refusal ?? t('history_none')
+      if (args.trim().startsWith('run')) {
+        const rest = args.trim().slice(3).trim()
+        const [name, ...tail] = rest.split(/\s+/)
+        if (name === undefined || name.length === 0) return t('commands_run_usage')
+        const line = `/${name}${tail.length > 0 ? ` ${tail.join(' ')}` : ''}`
+        try {
+          const execution = await commands.execute(resolved.agent, line, [], AbortSignal.timeout(180_000))
+          if (execution === undefined) return t('commands_not_found', { name: escapeHtml(name) })
+          if (execution.result.kind === 'error') {
+            return t('commands_error', { text: escapeHtml(execution.result.text.slice(0, 400)) })
+          }
+          const text = execution.result.text ?? ''
+          return text.length > 0
+            ? t('commands_ok', { text: escapeHtml(text.slice(0, 1500)) })
+            : t('commands_ok_plain')
+        } catch (error) {
+          return t('commands_error', { text: escapeHtml(safe(error).slice(0, 300)) })
+        }
+      }
+      const list = commands.list(resolved.agent)
+      if (list.length === 0) return t('commands_none')
+      const shown = list.slice(0, 25)
+      const lines = shown.map((descriptor) => t('commands_entry', {
+        name: escapeHtml(descriptor.name.slice(0, 40)),
+        desc: escapeHtml(descriptor.description.slice(0, 80)),
+      }))
+      const buttons = shown.map((descriptor, index) => ({
+        text: `/${descriptor.name}`.slice(0, 60),
+        callback: `r:${index}`,
+      }))
+      await deps.sendCard(targetSession, `${t('commands_header', { n: list.length })}${lines.join('')}\n${t('commands_pick')}`, {
+        kind: 'commands',
+        buttons,
+        lines: shown.map((descriptor) => `/${descriptor.name}`),
+      })
+      return undefined
+    }
+
+    case 'perms': {
+      const id = targetSession
+      if (id === undefined) return t('msg_no_target')
+      const presets = ctx.get('permissionPresets') as PermissionPresetsLike | undefined
+      if (presets === undefined) return t('perms_unavailable')
+      const resolved = await deps.resolveAgent(id)
+      if (resolved.agent === undefined) return resolved.refusal ?? t('history_none')
+      const approval = ctx.get('approval') as { overrideOf: (session: unknown) => string | undefined } | undefined
+      const sandbox = ctx.get('sandboxPolicy') as { overrideOf: (session: unknown) => string | undefined } | undefined
+      const options = presets.catalog().options.slice(0, 12)
+      const lines = [
+        t('perms_header', { label: escapeHtml(label(id)) }),
+        t('perms_current', { name: escapeHtml(presets.current(resolved.agent.session)) }),
+        t('perms_approval', { policy: approval?.overrideOf(resolved.agent.session) ?? 'ask' }),
+        t('perms_sandbox', { mode: sandbox?.overrideOf(resolved.agent.session) ?? 'default' }),
+      ]
+      if (options.length > 0) lines.push(t('perms_pick'))
+      const buttons = options.map((option, index) => ({
+        text: option.name.slice(0, 60),
+        callback: `x:${index}`,
+      }))
+      await deps.sendCard(targetSession, lines.join(''), {
+        kind: 'perms',
+        buttons,
+        values: options.map((option) => option.value),
+      })
+      return undefined
+    }
+
+    case 'skills': {
+      const cwd = targetSession !== undefined
+        ? (await deps.sessionCwd(targetSession)) ?? deps.workspaceDir()
+        : deps.workspaceDir()
+      const skills = ctx.get('skills') as SkillsLike | undefined
+      if (skills === undefined) return t('skills_unavailable')
+      const list = await skills.list({ cwd })
+      if (list.length === 0) return t('skills_none')
+      const shown = list.slice(0, 30)
+      const lines = shown.map((skill) => t('skills_entry', {
+        name: escapeHtml(skill.name.slice(0, 44)),
+        desc: escapeHtml(skill.description.slice(0, 70)),
+      }))
+      const buttons = shown.map((skill, index) => ({
+        text: skill.name.slice(0, 60),
+        callback: `k:${index}`,
+      }))
+      await deps.sendCard(targetSession, `${t('skills_header', { n: list.length })}${lines.join('')}\n${t('skills_pick')}`, {
+        kind: 'skills',
+        buttons,
+        names: shown.map((skill) => skill.name),
+        cwd,
+      })
+      return undefined
+    }
+
+    case 'skill': {
+      const trimmed = args.trim()
+      const space = trimmed.indexOf(' ')
+      const name = (space === -1 ? trimmed : trimmed.slice(0, space)).trim()
+      const text = space === -1 ? '' : trimmed.slice(space + 1).trim()
+      if (name.length === 0) return t('skill_usage')
+      const id = targetSession
+      if (id === undefined) return t('msg_no_target')
+      const skills = ctx.get('skills') as SkillsLike | undefined
+      if (skills === undefined) return t('skills_unavailable')
+      const cwd = (await deps.sessionCwd(id)) ?? deps.workspaceDir()
+      const definition = await skills.get(name, { cwd })
+      if (definition === undefined) return t('skill_not_found', { name: escapeHtml(name) })
+      await deps.deliverPromptText(id, t('skill_frame', {
+        name,
+        content: definition.content,
+        text: text.length > 0 ? text : t('skill_default_task'),
+      }))
+      state.touchIdle(id)
+      return t('skill_sent', { name: escapeHtml(name) })
+    }
+
+    case 'agents': {
+      const presets = ctx.get('agentPresets') as AgentPresetsLike | undefined
+      if (presets === undefined) return t('agents_unavailable')
+      const list = await presets.list()
+      if (list.length === 0) return t('agents_none')
+      const shown = list.slice(0, 15)
+      const lines = shown.map((preset) => t('agents_entry', {
+        name: escapeHtml((preset.name ?? preset.id).slice(0, 40)),
+        desc: escapeHtml((preset.description ?? '').slice(0, 80)),
+      }))
+      const buttons = shown.map((preset, index) => ({
+        text: (preset.name ?? preset.id).slice(0, 60),
+        callback: `a:${index}`,
+      }))
+      await deps.sendCard(targetSession, `${t('agents_header', { n: list.length })}${lines.join('')}\n${t('agents_pick')}`, {
+        kind: 'agents',
+        buttons,
+        ids: shown.map((preset) => preset.id),
+      })
+      return undefined
+    }
+
+    case 'menu': {
+      const entries: Array<[string, string]> = [
+        ['🧭', 'running'], ['📂', 'sessions'], ['📁', 'projects'], ['🧠', 'models'],
+        ['📊', 'usage'], ['🧮', 'context'], ['📚', 'skills'], ['⏰', 'tasks'],
+        ['📥', 'queue'], ['❓', 'help'],
+      ]
+      const buttons = entries.map(([emoji, command]) => ({
+        text: `${emoji} ${command}`.slice(0, 60),
+        callback: `c:${command}`,
+      }))
+      await deps.sendCard(targetSession, t('menu_header'), { kind: 'menu', buttons })
+      return undefined
+    }
+
+    case 'status': {
+      const report = deps.bridgeStatus()
+      const root = state.rootSession()
+      const lines = [
+        t('status_header'),
+        t('status_mode', { mode: escapeHtml(report.mode), profile: escapeHtml(report.profile) }),
+        t('status_leader', { leader: report.leading ? t('status_yes') : t('status_no') }),
+        t('status_mapped', { mapped: report.mapped, running: report.running }),
+        t('status_root', { root: root !== undefined ? root.slice(0, 18) : t('status_root_none') }),
+      ]
+      return lines.join('')
+    }
+
+    case 'delthread': {
+      const id = args.trim().length > 0 ? state.sessionByPrefix(args.trim()) : targetSession
+      if (id === undefined) return t('archive_usage')
+      const thread = state.threadOf(id)
+      if (thread !== undefined) {
+        await deps.telegram.deleteForumTopic(deps.chatId, thread)
+        state.clearThread(id)
+      }
+      return t('delthread_done')
+    }
+
+    case 'files': {
+      const fs = ctx.get('fs') as FileSystemLike | undefined
+      if (fs === undefined) return t('files_unavailable')
+      const raw = args.trim()
+      const cwd = targetSession !== undefined
+        ? (await deps.sessionCwd(targetSession)) ?? deps.workspaceDir()
+        : deps.workspaceDir()
+      const absolute = raw.length === 0 ? cwd : isAbsolute(raw) ? raw : join(cwd, raw)
+      try {
+        const target = await fs.resolve(absolute, { cwd })
+        const rendered = await renderFileBrowser(fs, target)
+        await deps.sendCard(targetSession, rendered.text, rendered.payload)
+        return undefined
+      } catch (error) {
+        return t('files_fail', { detail: escapeHtml(safe(error).slice(0, 160)) })
+      }
+    }
+
+    case 'ffind': {
+      const query = args.trim()
+      if (query.length === 0) return t('ffind_usage')
+      const fs = ctx.get('fs') as FileSystemLike | undefined
+      if (fs === undefined) return t('files_unavailable')
+      const cwd = targetSession !== undefined
+        ? (await deps.sessionCwd(targetSession)) ?? deps.workspaceDir()
+        : deps.workspaceDir()
+      try {
+        const target = await fs.resolve(cwd, { cwd })
+        const found = await findEntries((dir) => fs.listDir(dir), target, query, {
+          maxDepth: 4,
+          maxDirs: 150,
+          maxResults: 15,
+        })
+        if (found.length === 0) return t('ffind_none', { query: escapeHtml(query) })
+        const lines = found.map((entry) => t('ffind_entry', {
+          path: escapeHtml(shortPath(entry.displayPath, 58)),
+          size: entry.size !== undefined ? ` · ${String(entry.size)}` : '',
+        }))
+        return `${t('ffind_header', { n: found.length, query: escapeHtml(query) })}${lines.join('')}`
+      } catch (error) {
+        return t('files_fail', { detail: escapeHtml(safe(error).slice(0, 160)) })
+      }
+    }
+
     case 'locale': {
       const wanted = args.trim().toLowerCase()
       if (wanted !== 'es' && wanted !== 'en') return t('locale_usage')
@@ -503,6 +982,295 @@ export async function handleCommand(
     default:
       return t('unknown_command', { cmd: escapeHtml(command) })
   }
+}
+
+// ── button cards and their callbacks ────────────────────────────────────────
+
+/** Commands a menu button may run; any other `c:` payload falls through. */
+const MENU_COMMANDS = new Set([
+  'running', 'sessions', 'projects', 'models', 'usage', 'context', 'skills', 'tasks', 'queue', 'help',
+])
+
+/** The largest file a `/files` tap downloads as a document, in bytes. */
+const FILE_DOWNLOAD_CAP = 256 * 1024
+
+/** One directory listing as a card: its text, its buttons, and the entries they address. */
+async function renderFileBrowser(
+  fs: FileSystemLike,
+  target: FsTargetLike,
+): Promise<{ text: string, payload: CardPayload }> {
+  const entries = await fs.listDir(target)
+  const sorted = [...entries].sort((a, b) =>
+    (a.type === 'directory' ? 0 : 1) - (b.type === 'directory' ? 0 : 1) || a.name.localeCompare(b.name))
+  const shown: FsCardEntry[] = sorted.slice(0, 40).map((entry) => ({
+    name: entry.name,
+    type: entry.type,
+    ...(entry.size !== undefined ? { size: entry.size } : {}),
+    target: entry.target,
+  }))
+  // The up-button: one synthetic entry appended last, so a tap climbs out.
+  const parent = dirname(target.displayPath)
+  if (parent !== target.displayPath) {
+    try {
+      shown.push({ name: '..', type: 'directory', target: await fs.resolve(parent) })
+    } catch {
+      /* a directory whose parent will not resolve loses the up-button, not the listing */
+    }
+  }
+  const lines = shown.map((entry) => entry.type === 'directory'
+    ? `\n📁 ${escapeHtml(entry.name)}`
+    : `\n📄 ${escapeHtml(entry.name)}${entry.size !== undefined ? ` · ${String(entry.size)}` : ''}`)
+  const buttons = shown.map((entry, index) => ({
+    text: `${entry.type === 'directory' ? '📁' : '📄'} ${entry.name}`.slice(0, 60),
+    callback: `f:${index}`,
+  }))
+  return {
+    text: `${t('files_dir', { path: escapeHtml(shortPath(target.displayPath, 50)) })}${lines.join('')}`,
+    payload: { kind: 'files', buttons, entries: shown },
+  }
+}
+
+/**
+ * One tap on a card the bridge drew. The card's state rides the message id, so
+ * a tap only ever addresses the card it lives in.
+ * @returns true when the payload belonged to a bridge card — answered, refused,
+ *   or failed alike — and the tap needs no other handler.
+ */
+export async function handleCardCallback(
+  deps: CommandDeps,
+  payload: string,
+  card: CardPayload,
+  messageId: number | undefined,
+  cqId: string,
+  target: string,
+): Promise<boolean> {
+  const { ctx, state } = deps
+  const session = target.length > 0 ? target : undefined
+  const answer = (text?: string, alert = false): Promise<void> =>
+    deps.telegram.answerCallbackQuery(cqId, text, alert).catch(() => undefined)
+  /** Resolve `<prefix><index>` against a list the card carries; undefined when the payload is not that prefix. */
+  const pick = (prefix: string, list: ReadonlyArray<string>): string | undefined => {
+    if (!payload.startsWith(prefix)) return undefined
+    const index = Number(payload.slice(prefix.length))
+    if (!Number.isInteger(index) || index < 0) return undefined
+    return list[index]
+  }
+
+  if (payload.startsWith('c:')) {
+    const command = payload.slice(2)
+    if (!MENU_COMMANDS.has(command)) return false
+    await answer()
+    const reply = await handleCommand(deps, command, '', session)
+    if (reply !== undefined) await deps.sendText(session, reply)
+    return true
+  }
+
+  if (payload.startsWith('p:')) {
+    if (card.kind !== 'projects') return false
+    const path = pick('p:', card.paths)
+    if (path === undefined) {
+      await answer(t('form_inactive'))
+      return true
+    }
+    await answer()
+    try {
+      const sessionId = await deps.createSession(path)
+      void deps.ensureThread(sessionId)
+      if (messageId !== undefined) {
+        await deps.rebindCard(messageId, t('projects_created', {
+          id: sessionId,
+          title: escapeHtml(basename(path)),
+        }), { kind: 'projects', buttons: card.buttons, paths: card.paths })
+      }
+    } catch (error) {
+      if (messageId !== undefined) {
+        await deps.rebindCard(messageId, t('projects_fail', { detail: escapeHtml(safe(error).slice(0, 200)) }), card)
+      }
+    }
+    return true
+  }
+
+  if (payload.startsWith('k:')) {
+    if (card.kind !== 'skills') return false
+    const name = pick('k:', card.names)
+    if (name === undefined) {
+      await answer(t('form_inactive'))
+      return true
+    }
+    const skills = ctx.get('skills') as SkillsLike | undefined
+    if (skills === undefined) {
+      await answer(t('skills_unavailable'))
+      return true
+    }
+    const definition = await skills.get(name, { cwd: card.cwd })
+    if (definition === undefined) {
+      await answer(t('form_inactive'))
+      return true
+    }
+    await answer()
+    if (messageId !== undefined) {
+      await deps.rebindCard(messageId, t('skills_detail', {
+        name: escapeHtml(definition.name.slice(0, 60)),
+        desc: escapeHtml(definition.description.slice(0, 200)),
+        when: definition.whenToUse !== undefined
+          ? t('skills_when', { when: escapeHtml(definition.whenToUse.slice(0, 200)) })
+          : '',
+        content: escapeHtml(definition.content.slice(0, 1200)),
+      }), card)
+    }
+    return true
+  }
+
+  if (payload.startsWith('a:')) {
+    if (card.kind !== 'agents') return false
+    const id = pick('a:', card.ids)
+    if (id === undefined) {
+      await answer(t('form_inactive'))
+      return true
+    }
+    if (session === undefined) {
+      await answer(t('msg_no_target'))
+      return true
+    }
+    const presets = ctx.get('agentPresets') as AgentPresetsLike | undefined
+    if (presets === undefined) {
+      await answer(t('agents_unavailable'))
+      return true
+    }
+    const resolved = await deps.resolveAgent(session)
+    if (resolved.agent === undefined) {
+      await answer(resolved.refusal ?? t('resume_none'))
+      return true
+    }
+    try {
+      await presets.select(resolved.agent, id)
+      await answer()
+      if (messageId !== undefined) {
+        await deps.rebindCard(messageId, t('agents_selected', { name: escapeHtml(id) }), card)
+      }
+    } catch (error) {
+      await answer(t('agents_error', { detail: safe(error).slice(0, 160) }), true)
+    }
+    return true
+  }
+
+  if (payload.startsWith('x:')) {
+    if (card.kind !== 'perms') return false
+    const value = pick('x:', card.values)
+    if (value === undefined) {
+      await answer(t('form_inactive'))
+      return true
+    }
+    if (session === undefined) {
+      await answer(t('msg_no_target'))
+      return true
+    }
+    const presets = ctx.get('permissionPresets') as PermissionPresetsLike | undefined
+    if (presets === undefined) {
+      await answer(t('perms_unavailable'))
+      return true
+    }
+    const resolved = await deps.resolveAgent(session)
+    if (resolved.agent === undefined) {
+      await answer(resolved.refusal ?? t('resume_none'))
+      return true
+    }
+    try {
+      presets.set(resolved.agent.session, value)
+      await answer()
+      if (messageId !== undefined) {
+        await deps.rebindCard(messageId, t('perms_done', { name: escapeHtml(value) }), card)
+      }
+    } catch (error) {
+      await answer(t('perms_error', { detail: safe(error).slice(0, 160) }), true)
+    }
+    return true
+  }
+
+  if (payload.startsWith('r:')) {
+    if (card.kind !== 'commands') return false
+    const line = pick('r:', card.lines)
+    if (line === undefined) {
+      await answer(t('form_inactive'))
+      return true
+    }
+    if (session === undefined) {
+      await answer(t('msg_no_target'))
+      return true
+    }
+    const commands = ctx.get('commands') as CommandsLike | undefined
+    if (commands === undefined) {
+      await answer(t('commands_unavailable'))
+      return true
+    }
+    const resolved = await deps.resolveAgent(session)
+    if (resolved.agent === undefined) {
+      await answer(resolved.refusal ?? t('resume_none'))
+      return true
+    }
+    try {
+      const execution = await commands.execute(resolved.agent, line, [], AbortSignal.timeout(180_000))
+      const output = execution?.result.text ?? ''
+      const text = execution === undefined
+        ? t('commands_not_found_plain')
+        : execution.result.kind === 'error'
+          ? t('commands_error', { text: escapeHtml(output.slice(0, 500)) })
+          : output.length > 0
+            ? t('commands_ok', { text: escapeHtml(output.slice(0, 1500)) })
+            : t('commands_ok_plain')
+      await answer()
+      if (messageId !== undefined) await deps.rebindCard(messageId, text, card)
+    } catch (error) {
+      await answer(t('commands_error', { text: safe(error).slice(0, 200) }), true)
+    }
+    return true
+  }
+
+  if (payload.startsWith('f:')) {
+    if (card.kind !== 'files') return false
+    const index = Number(payload.slice(2))
+    if (!Number.isInteger(index) || index < 0 || index >= card.entries.length) {
+      await answer(t('form_inactive'))
+      return true
+    }
+    const entry = card.entries[index]
+    if (entry === undefined) return true
+    const fs = ctx.get('fs') as FileSystemLike | undefined
+    if (fs === undefined) {
+      await answer(t('files_unavailable'))
+      return true
+    }
+    if (entry.type === 'directory') {
+      try {
+        const rendered = await renderFileBrowser(fs, entry.target)
+        await answer()
+        if (messageId !== undefined) await deps.rebindCard(messageId, rendered.text, rendered.payload)
+      } catch (error) {
+        await answer(t('files_fail', { detail: safe(error).slice(0, 120) }), true)
+      }
+      return true
+    }
+    if (entry.size !== undefined && entry.size > FILE_DOWNLOAD_CAP) {
+      await answer(t('files_too_big', { kb: Math.round(entry.size / 1024) }), true)
+      return true
+    }
+    try {
+      const content = await fs.readText(entry.target)
+      const safeName = entry.name.replace(/[^\w.-]+/g, '_').slice(0, 60)
+      const path = join(tmpdir(), `tg-file-${Date.now()}-${safeName}`)
+      writeFileSync(path, content, 'utf-8')
+      const thread = session !== undefined ? state.threadOf(session) : undefined
+      await deps.telegram.sendDocument(deps.chatId, path, {
+        ...(thread === undefined ? {} : { messageThreadId: thread }),
+      })
+      await answer(t('files_sent', { name: entry.name.slice(0, 60) }))
+    } catch (error) {
+      await answer(t('files_fail', { detail: safe(error).slice(0, 160) }), true)
+    }
+    return true
+  }
+
+  return false
 }
 
 // ── tasks and the /newtask wizard ────────────────────────────────────────────

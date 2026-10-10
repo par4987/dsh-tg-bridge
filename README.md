@@ -14,8 +14,10 @@ Corre **dentro** del proceso del perfil de dsh como bundle Cordis, sobre los pun
 - **Multimedia**: fotos → el agente las ve (attachments del harness); documentos de texto → inline al prompt; binarios → disco con ruta; **notas de voz → transcripción** (whisper.cpp local o cualquier API compatible con OpenAI — opt-in).
 - **Archivos generados**: el agente produce un archivo durante un turno y el bot lo entrega solo — foto si es imagen, texto legible si es `.md`/`.txt` chico, documento adjunto en el resto.
 - **Preguntas y permisos con botones inline** — respondibles desde el teléfono; el bridge solo reclama las sesiones que espeja, el resto queda para la Web y ACP.
-- **Recordatorios** (`/newtask`, `/tasks`) sobre el subsistema Schedule del harness — los crea con el mismo dominio durable que las herramientas model-facing.
-- **`/models`**, **`/usagestats`** con tokens por turno y acumulados, **`/ls`**, **`/use`**, **`/history`**, **`/queue`**, **`/archive`**, **`/kill`**, **`/find`**.
+- **Recordatorios** (`/newtask`, `/tasks`, `/taskcancel`) sobre el subsistema Schedule del harness — los crea y borra con el mismo dominio durable que las herramientas model-facing.
+- **Navegación desde el teléfono**: `/menu` (tablero), `/sessions` (corpus completo), `/projects` (workspaces con un toque para abrir sesión), `/send` (hablarle a otra sesión), `/files`/`/ffind` (explorar y buscar archivos de la carpeta de la sesión).
+- **Inspección**: `/usage` (foto del momento), `/context` (ocupación, compactaciones y último resumen), `/commands` (los del harness, sin modelo), `/perms` (presets con un toque), `/skills`·`/skill`, `/agents`, `/status`, `/delthread`.
+- **`/models`**, **`/usagestats`** con tokens por turno y acumulados, **`/ls`**, **`/use`**, **`/history`**, **`/queue`**, **`/clearqueue`**, **`/archive`**, **`/kill`**, **`/find`**.
 
 El manual completo está en [`MANUAL.md`](MANUAL.md) (Español) / [`MANUAL.en.md`](MANUAL.en.md) (English).
 

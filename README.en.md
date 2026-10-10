@@ -16,8 +16,10 @@ It runs **inside** the dsh profile's process as a Cordis bundle, over the docume
 - **Media**: photos → the agent sees them (harness attachments); text documents → inlined into the prompt; binaries → saved to disk with their path; **voice notes → transcription** (local whisper.cpp or any OpenAI-compatible API — opt-in).
 - **Generated files**: the agent produces a file during a turn and the bot delivers it by itself — a photo when it is an image, readable text for small `.md`/`.txt`, an attached document otherwise.
 - **Questions and permissions as inline keyboards** — answerable from the phone; the bridge claims only the sessions it mirrors, the rest stay with the Web UI and ACP.
-- **Reminders** (`/newtask`, `/tasks`) on the harness's Schedule subsystem — created with the same durable domain the model-facing tools use.
-- **`/models`**, **`/usagestats`** with per-turn and accumulated tokens, **`/ls`**, **`/use`**, **`/history`**, **`/queue`**, **`/archive`**, **`/kill`**, **`/find`**.
+- **Reminders** (`/newtask`, `/tasks`, `/taskcancel`) on the harness's Schedule subsystem — created and deleted with the same durable domain the model-facing tools use.
+- **Phone navigation**: `/menu` (hub), `/sessions` (full corpus), `/projects` (workspaces, one tap opens a session), `/send` (talk to another session), `/files`/`/ffind` (browse and find files of the session's folder).
+- **Inspection**: `/usage` (right now), `/context` (occupancy, compactions, last summary), `/commands` (the harness's own, no model), `/perms` (one-tap presets), `/skills`·`/skill`, `/agents`, `/status`, `/delthread`.
+- **`/models`**, **`/usagestats`** with per-turn and accumulated tokens, **`/ls`**, **`/use`**, **`/history`**, **`/queue`**, **`/clearqueue`**, **`/archive`**, **`/kill`**, **`/find`**.
 
 The complete manual lives in [`MANUAL.en.md`](MANUAL.en.md) (English) / [`MANUAL.md`](MANUAL.md) (Español).
 
