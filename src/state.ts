@@ -22,6 +22,8 @@ export interface MappedSession {
   title?: string
   /** Last real interaction, in epoch milliseconds. */
   lastIdle?: number
+  /** When the mapping was created — the sweep gives a fresh mapping one full window before deleting its thread. */
+  mappedAt?: number
   /** Token usage accumulated from committed assistant messages. */
   usage?: { inputTokens: number, outputTokens: number, totalTokens: number }
   /** Usage of the most recently committed assistant message. */
@@ -96,7 +98,7 @@ export class BridgeState {
     this.load()
     let mapping = this.sessions.get(sessionId)
     if (mapping === undefined) {
-      mapping = {}
+      mapping = { mappedAt: Date.now() }
       this.sessions.set(sessionId, mapping)
     }
     return mapping

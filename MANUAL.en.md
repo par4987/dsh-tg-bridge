@@ -47,7 +47,11 @@ The session's last `n` exchanges (default 8), read from the durable log. Only se
 Finds sessions by title or id.
 
 ### `/archive` / `/unarchive`
-Deletes the session's thread (clearing the thread mapping, keeping title/usage/archived) and `/unarchive` recreates a fresh one — the same semantics as your opencode-tg in private chats, where closing topics does not apply. With `archiveAfterDays > 0`, deletion happens automatically after that idleness.
+Deletes the session's thread (clearing the thread mapping, keeping title/usage/archived) and `/unarchive` recreates a fresh one — the same semantics as your opencode-tg in private chats, where closing topics does not apply.
+
+With `archiveAfterDays > 0` deletion is **automatic**: the poll owner sweeps every mapping on each election tick and deletes the threads of sessions idle longer than that many days. The sweep runs only in the leading process (one owner for the deletion) and honors a grace period — a mapping younger than the window is left alone, so `/rebuild` may import old sessions without the next tick deleting their fresh thread.
+
+Writing to an archived session — through the chat root or `/sh` — **revives** it: the flag drops and the thread is recreated. Silence lasts only until someone talks to it again.
 
 ### `/kill`
 Cancels the session's running turn.

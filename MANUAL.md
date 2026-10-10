@@ -45,7 +45,11 @@ Los últimos `n` intercambios (default 8) de la sesión, leídos del log durable
 Busca sesiones por título o id.
 
 ### `/archive` / `/unarchive`
-Borra el hilo de la sesión (y limpia el mapeo de thread, conservando título/uso/archivada) y `/unarchive` lo recrea nuevo — misma semántica que tu opencode-tg en chats privados, donde cerrar tópicos no aplica. Con `archiveAfterDays > 0`, el borrado es automático tras esa inactividad.
+Borra el hilo de la sesión (y limpia el mapeo de thread, conservando título/uso/archivada) y `/unarchive` lo recrea nuevo — misma semántica que tu opencode-tg en chats privados, donde cerrar tópicos no aplica.
+
+Con `archiveAfterDays > 0` el borrado es **automático**: el dueño del poll barre todos los mapeos en cada tick de elección y borra los hilos de sesiones idle más de esa cantidad de días. El sweep corre solo en el proceso líder (un solo dueño de la eliminación) y respeta una graza: un mapeo más joven que la ventana no se toca, de modo que `/rebuild` pueda importar sesiones viejas sin que el próximo tick les borre el hilo nuevo.
+
+Escribirle a una sesión archivada — por la raíz del chat o por `/sh` — **la revive**: cae el flag y se recrear el hilo. El silencio dura mientras nadie le hable.
 
 ### `/kill`
 Cancela el turno en curso de la sesión.

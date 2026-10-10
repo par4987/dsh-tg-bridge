@@ -462,7 +462,6 @@ export function apply(ctx: Context, config: Config): void {
           void send(id, t('turn_blocked'))
         }
         state.touchIdle(id)
-        sweepIdleArchive(id)
         break
       }
       default:
@@ -470,17 +469,28 @@ export function apply(ctx: Context, config: Config): void {
     }
   })
 
-  /** Close threads idle past archiveAfterDays — Telegram "archive" is close. */
-  function sweepIdleArchive(sessionId: string): void {
+  /**
+   * Delete the threads of sessions idle past `archiveAfterDays`. Telegram
+   * offers no durable close, so the sweep deletes and `/unarchive` recreates.
+   * It runs from the election tick, not on per-session events: a session idle
+   * past the window by definition ends no turn that could trigger the check.
+   * A mapping younger than the window is spared, so `/rebuild` importing an
+   * old session does not lose its new thread on the next tick.
+   */
+  function sweepIdleArchives(): void {
     if (config.archiveAfterDays <= 0) return
-    const mapping = state.entries().find(([id]) => id === sessionId)?.[1]
-    if (mapping === undefined || mapping.lastIdle === undefined) return
-    const cutoff = Date.now() - config.archiveAfterDays * 86_400_000
-    if (mapping.lastIdle >= cutoff) return
-    state.setArchived(sessionId, true)
-    const thread = state.threadOf(sessionId)
-    if (thread !== undefined) {
-      void telegram.closeForumTopic(chatId, thread).catch((error) => log('warn', 'archive sweep', error))
+    const now = Date.now()
+    const cutoff = now - config.archiveAfterDays * 86_400_000
+    for (const [id, mapping] of state.entries()) {
+      if (mapping.threadId === undefined) continue
+      if (mapping.lastIdle === undefined || mapping.lastIdle >= cutoff) continue
+      const since = mapping.mappedAt ?? mapping.lastIdle
+      if (now - since < config.archiveAfterDays * 86_400_000) continue
+      state.setArchived(id, true)
+      void telegram.deleteForumTopic(chatId, mapping.threadId)
+        .then(() => { state.clearThread(id) })
+        .catch((error) => log('warn', 'archive sweep', error))
+      log('info', `swept idle thread for ${id.slice(0, 12)} (idle ${Math.round((now - mapping.lastIdle) / 86_400_000)}d)`)
     }
   }
 
@@ -550,8 +560,20 @@ export function apply(ctx: Context, config: Config): void {
 
   const coalescing = new Map<string, Coalesced>()
 
+  /**
+   * Writing to an archived session brings it back: the archived flag drops
+   * and its thread is recreated, so the mirror resumes instead of silently
+   * swallowing the conversation into a thread that no longer exists.
+   */
+  function revive(sessionId: string): void {
+    if (!state.isArchived(sessionId)) return
+    state.setArchived(sessionId, false)
+    void ensureThread(sessionId)
+  }
+
   async function deliverPrompt(sessionId: string, content: ContentBlock[]): Promise<void> {
     try {
+      revive(sessionId)
       const resolved = await resolveAgent(sessionId)
       if (resolved.agent === undefined) {
         await send(sessionId, resolved.refusal ?? t('resume_none'))
@@ -907,6 +929,7 @@ export function apply(ctx: Context, config: Config): void {
         ? undefined
         : describeReplyTarget(message.reply_to_message as ReplyTarget | undefined, replyLabels)
       const prompt = withReplyContext(text, quote, ({ quote: q, prompt: p }) => t('quote_frame', { quote: q, prompt: p }))
+      revive(target)
       state.touchIdle(target)
       queuePrompt(target, prompt)
       return
@@ -947,8 +970,8 @@ export function apply(ctx: Context, config: Config): void {
       { command: 'queue', description: 'Session inbox' },
       { command: 'tasks', description: 'Session reminders' },
       { command: 'newtask', description: 'Reminder wizard' },
-      { command: 'archive', description: 'Close this thread' },
-      { command: 'unarchive', description: 'Reopen this thread' },
+      { command: 'archive', description: 'Delete this thread' },
+      { command: 'unarchive', description: 'Recreate this thread' },
       { command: 'locale', description: 'Interface language' },
     ], [chatId]).catch((error) => log('warn', 'setMyCommands', error))
   }
@@ -989,6 +1012,8 @@ export function apply(ctx: Context, config: Config): void {
   function tick(): void {
     beatProfile(stateDir, myProfile, (error) => log('warn', 'profile beat write failed', error))
     elect()
+    // Only the poll owner sweeps: one process must own the deletion.
+    if (leading) sweepIdleArchives()
   }
 
   ctx.setInterval(tick, LOCK_INTERVAL_MS)

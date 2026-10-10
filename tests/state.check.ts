@@ -96,4 +96,17 @@ export const stateChecks: Check[] = [
     const other = state.profileOf('ses-none')
     assert(other === undefined, 'an unknown session has no profile')
   }),
+
+  define('a fresh mapping records when it was created', () => {
+    const { state } = freshState()
+    const before = Date.now()
+    state.setTitle('ses-1', 'hola')
+    const mappedAt = state.entries()[0]?.[1].mappedAt
+    assert(mappedAt !== undefined, 'mappedAt is set when the mapping is created')
+    assert(mappedAt! >= before && mappedAt! <= Date.now(), 'mappedAt is the creation moment')
+    // An existing mapping keeps its creation time across later writes.
+    const first = mappedAt
+    state.touchIdle('ses-1', Date.now())
+    assert(state.entries()[0]?.[1].mappedAt === first, 'mappedAt does not move on later writes')
+  }),
 ]
