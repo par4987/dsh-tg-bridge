@@ -161,6 +161,15 @@ Al terminar un turno, el bridge revisa las rutas de archivo que aparecieron en l
 - Reiniciar el perfil no pierde sesiones: los mapeos persisten en `<stateDir>/state.json` y una sesión persistida se retoma al primer mensaje. Una sesión cerrada en la PC y no persistida responde con el aviso honesto de `/ls`.
 - Dos procesos con el bundle (la web y un headless): el lock de `<stateDir>` elige un dueño del poll; el otro queda inactivo y toma el asiento si el dueño muere o se congela.
 
+## Lo que no se portó del bot de opencode (y por qué)
+
+- **`/git`, `/worktree`, `/ci`**: el harness no tiene subsistema de VCS ni de CI. El camino honesto es pedírselo al agente — su tool de shell corre `git` con su sandbox y sus permisos, y todo queda en el log del turno.
+- **`/revert`**: el log de sesión del harness es estrictamente append-only; no existe seam de truncado ni rollback. La única sombra es la compactación, que reemplaza el resumen, no deshace un turno.
+- **`/mcp`**: los clientes MCP son entradas de composición por servidor, con ciclo de vida de plugin; no hay servicio runtime compartido que listar/conectar/desconectar.
+- **`/turns`**: no hay agregación de diff por turno; solo los diffs por escritura que adjunta la tool de archivos.
+- **`/move`**: el `cwd` de una sesión queda fijado al crearla; el registro de workspaces puede mover la contabilidad, nunca el `cwd` de la sesión.
+- **`/bots`, `/release`**: el bridge es una instancia de plugin por perfil; no hay pool de bots entre perfiles al que devolver nada.
+
 ## Voz — activación
 
 1. **Local**: `stt: { provider: local }` + bajar `whisper-cli` y un modelo ggml a `<stateDir>/stt/` (ver el README) + `ffmpeg` en el PATH.

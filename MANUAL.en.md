@@ -163,6 +163,15 @@ When a turn ends, the bridge scans the file paths that appeared in tool calls an
 - Restarting the profile loses no sessions: mappings persist in `<stateDir>/state.json` and a persisted session resumes on its first message. A session closed on the PC and not persisted answers with the honest notice from `/ls`.
 - Two processes with the bundle (the web and a headless): the `<stateDir>` lock elects one poll owner; the other stays inactive and takes the seat when the owner dies or freezes.
 
+## What was not ported from the opencode bot (and why)
+
+- **`/git`, `/worktree`, `/ci`**: the harness has no VCS or CI subsystem. The honest path is asking the agent — its shell tool runs `git` with its sandbox and permissions, and everything lands in the turn's log.
+- **`/revert`**: the harness session log is strictly append-only; no truncation or rollback seam exists. The only shadowing is compaction, which replaces a summary rather than undoing a turn.
+- **`/mcp`**: MCP clients are per-server composition entries with plugin lifecycles; there is no shared runtime service to list, connect, or disconnect.
+- **`/turns`**: no per-turn diff aggregation exists; only the per-write diffs the filesystem tool attaches.
+- **`/move`**: a session's `cwd` is fixed at creation; the workspace registry can move the accounting, never the session's own `cwd`.
+- **`/bots`, `/release`**: the bridge is one plugin instance per profile; there is no cross-profile bot pool to release anything into.
+
 ## Voice — setup
 
 1. **Local**: `stt: { provider: local }` + drop `whisper-cli` and a ggml model into `<stateDir>/stt/` (see the README) + `ffmpeg` on the PATH.
