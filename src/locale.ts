@@ -37,6 +37,7 @@ const ES: Catalog = {
   approval_reject: '✖ Rechazar',
   approval_allowed: '✅ Permitido',
   approval_rejected: '✖ Rechazado',
+  approval_delegated: '⏭ Se venció la espera — la pregunta pasa a la app.',
   approval_cancelled: '⏹ Se canceló la espera.',
   form_inactive: '⚠️ Ya no está pendiente — alguien lo respondió o se canceló.',
 
@@ -51,6 +52,7 @@ const ES: Catalog = {
   question_other: '✍️ Otra (respondé con texto)',
   question_confirm: '✅ Confirmar',
   question_answered: '✅ Respondido: {answer}',
+  question_delegated: '⏭ Se venció la espera — la pregunta pasa a la app.',
   question_skipped: '⏭ Omitida',
   question_cancelled: '⏹ Pregunta cancelada.',
 
@@ -353,6 +355,7 @@ const EN: Catalog = {
   approval_reject: '✖ Reject',
   approval_allowed: '✅ Allowed',
   approval_rejected: '✖ Rejected',
+  approval_delegated: '⏭ The wait ran out — the app takes the question.',
   approval_cancelled: '⏹ The wait was cancelled.',
   form_inactive: '⚠️ No longer pending — answered or cancelled elsewhere.',
 
@@ -367,6 +370,7 @@ const EN: Catalog = {
   question_other: '✍️ Other (reply with text)',
   question_confirm: '✅ Confirm',
   question_answered: '✅ Answered: {answer}',
+  question_delegated: '⏭ The wait ran out — the question moves to the app.',
   question_skipped: '⏭ Skipped',
   question_cancelled: '⏹ Question cancelled.',
 

@@ -142,6 +142,8 @@ Cuando el agente pide una decisión — la tool `ask_user_question`, o un permis
 - **Preguntas**: una tarjeta por pregunta; un toque elige, en las de multi-selección tocás varias y confirmás; "✍️ Otra" arma la respuesta libre: el próximo mensaje del hilo se convierte en la respuesta (nada más se envía al agente).
 - **Permisos**: ✅ una vez / ✖ rechazar. "Siempre" es política del harness (permission presets), no de un botón de chat — por diseño, un toque en el teléfono nunca institucionaliza un permiso.
 
+**Quién contesta primero** (`decisions` en la configuración): ambas decisiones viajan en cascada, y el reenviador remoto del perfil (conectado a la app Desktop o Web) se registra antes que el plugin. Con `app-first` (default) la app reclama y contesta primero — el teléfono solo ve lo que la app delega. Con `phone-first` el bridge salta adelante (`prepend`) y las sesiones espejadas preguntan al teléfono primero; si no hay toque en `decisionTimeoutMs` (default 2 minutos), la tarjeta avisa "se venció la espera" y el pedido pasa a la app. Sin app conectada, el pedido espera en el Gateway a que alguien se conecte — `phone-first` es lo que hace que el teléfono realmente participe.
+
 Si la pregunta ya fue respondida en la PC, el toque recibe "ya no está pendiente" y no manda nada.
 
 ## Multimedia

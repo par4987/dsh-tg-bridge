@@ -77,6 +77,8 @@ Todo va en el `cordis.patch.yml` del perfil (o del home), sobre el id `tg-bridge
 | `mirror` | `all` | `all` crea hilo para cada sesión nueva; `watched` solo para las mapeadas |
 | `coalesceMs` / `coalesceBusyMs` | `2000` / `8000` | Ventana que une mensajes seguidos en un prompt (idle / busy) |
 | `archiveAfterDays` | `0` | Cierra el hilo tras N días sin uso |
+| `decisions` | `app-first` | Quién contesta permisos y preguntas primero: `app-first` la UI conectada (Desktop/Web), `phone-first` este bridge por delante del forwarder remoto |
+| `decisionTimeoutMs` | `120000` | En `phone-first`, cuánto espera un toque antes de delegar a la UI |
 | `render.*` | ver `src/config.ts` | `editIntervalMs`, `showDiffs`, `diffMaxLines`, `showReasoning`, `reasoningChars` |
 | `locale` | `es` | Idioma del bot (`en` disponible, `/locale` lo cambia en runtime) |
 | `debugEvents` | `false` | Loguea cada evento de sesión que ve el renderer |

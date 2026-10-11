@@ -46,13 +46,14 @@ class FakeTelegram extends Telegram {
 const agentOf = (id: string): Agent => ({ id } as unknown as Agent)
 
 /** Wire a hub that mirrors only ses-1 into thread 5. */
-function makeHub(): { hub: AnswererHub, telegram: FakeTelegram } {
+function makeHub(decisionTimeoutMs = 0): { hub: AnswererHub, telegram: FakeTelegram } {
   const telegram = new FakeTelegram()
   const hub = new AnswererHub({
     telegram,
     chatId: 1,
     threadOf: (sessionId) => (sessionId === 'ses-1' ? 5 : undefined),
     notify: () => undefined,
+    decisionTimeoutMs,
   })
   return { hub, telegram }
 }
@@ -144,5 +145,72 @@ export const answererChecks: Check[] = [
     armed?.submit('Mi propio nombre')
     const answer = await pending
     assert(answer.answers[0]?.custom === 'Mi propio nombre', 'the free text becomes the custom answer')
+  }),
+
+  define('a phone-first timeout delegates an unanswered approval', async () => {
+    const { hub, telegram } = makeHub(30)
+    let delegated = false
+    const pending = hub.approval(approvalOf(agentOf('ses-1')), async () => {
+      delegated = true
+      return 'rejected'
+    })
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    assert(await pending === 'rejected', "the next answerer's outcome resolves the request")
+    assert(delegated, 'the delegation called next')
+    const card = telegram.sent.find((entry) => entry.text.includes('bash'))
+    assert(card !== undefined, 'the card was sent')
+    assert(telegram.sent.some((entry) => entry.id === card?.id && entry.text.includes('Se venció')),
+      'the card text says the wait ran out')
+    const handled = await hub.handleCallback('a:y', card?.id ?? -1, 'cq-8', 'ses-1')
+    assert(handled === false, 'a late tap on the delegated card finds no pending request')
+  }),
+
+  define('a tap before the timeout settles and stops the clock', async () => {
+    const { hub, telegram } = makeHub(80)
+    let delegated = false
+    const pending = hub.approval(approvalOf(agentOf('ses-1')), async () => {
+      delegated = true
+      return 'rejected'
+    })
+    await settle()
+    await hub.handleCallback('a:y', lastCardId(telegram), 'cq-9', 'ses-1')
+    assert(await pending === 'allowed-once', 'the phone tap answers the request')
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    assert(delegated === false, 'the settled request never delegates')
+  }),
+
+  define('a question timeout delegates and retires every card', async () => {
+    const { hub, telegram } = makeHub(30)
+    const request: AskUserQuestionRequestEvent = {
+      agent: agentOf('ses-1'),
+      questions: [
+        { id: 'q1', question: '¿Uno?', options: [{ label: 'Sí' }] },
+        { id: 'q2', question: '¿Dos?', options: [{ label: 'No' }] },
+      ],
+    }
+    const fromTheApp: AskUserQuestionAnswer = {
+      answers: [{ id: 'q1', selected: ['Sí'] }, { id: 'q2', selected: ['No'] }],
+    }
+    const pending = hub.questions(request, async () => fromTheApp)
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    assert(await pending === fromTheApp, "the next answerer's answers resolve the request")
+    const retired = telegram.sent.filter((entry) => entry.text.includes('Se venció'))
+    assert(retired.length === 2, `both cards say the wait ran out (got ${retired.length})`)
+  }),
+
+  define('a zero timeout keeps the claim open', async () => {
+    const { hub } = makeHub(0)
+    let delegated = false
+    const pending = hub.approval(approvalOf(agentOf('ses-1')), async () => {
+      delegated = true
+      return 'rejected'
+    })
+    await settle()
+    const state = await Promise.race([
+      pending.then(() => 'resolved', () => 'resolved'),
+      new Promise((resolve) => setTimeout(() => resolve('waiting'), 40)),
+    ])
+    assert(state === 'waiting', 'the claim stays open with no timeout configured')
+    assert(delegated === false, 'next was never called')
   }),
 ]

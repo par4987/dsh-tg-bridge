@@ -79,6 +79,8 @@ Everything goes into the profile's (or the home's) `cordis.patch.yml`, on the `t
 | `mirror` | `all` | `all` gives every new session a thread; `watched` only the mapped ones |
 | `coalesceMs` / `coalesceBusyMs` | `2000` / `8000` | Window merging consecutive messages into one prompt (idle / busy) |
 | `archiveAfterDays` | `0` | Close the thread after N idle days |
+| `decisions` | `app-first` | Which surface answers approvals and questions first: `app-first` the connected UI (Desktop/Web), `phone-first` this bridge ahead of the remote forwarder |
+| `decisionTimeoutMs` | `120000` | In `phone-first`, how long a claim waits for a tap before delegating to the UI |
 | `render.*` | see `src/config.ts` | `editIntervalMs`, `showDiffs`, `diffMaxLines`, `showReasoning`, `reasoningChars` |
 | `locale` | `es` | The bot's language (`en` available; `/locale` switches at runtime) |
 | `debugEvents` | `false` | Log every session event the renderer sees |

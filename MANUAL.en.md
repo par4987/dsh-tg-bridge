@@ -144,6 +144,8 @@ When the agent asks for a decision — the `ask_user_question` tool, or a permis
 - **Questions**: one card per question; a tap chooses, in multi-select you tap several and confirm; "✍️ Other" arms a free answer: the thread's next message becomes the answer (nothing else reaches the agent).
 - **Permissions**: ✅ allow once / ✖ reject. "Always" is harness policy (permission presets), not a chat button — by design, one tap on the phone never institutionalizes a permission.
 
+**Who answers first** (`decisions` in configuration): both decisions travel in a waterfall, and the profile's remote forwarder (wired to the Desktop or Web app) registers before the plugin. With `app-first` (default) the app claims and answers first — the phone only sees what the app delegates. With `phone-first` the bridge jumps ahead (`prepend`) and mirrored sessions ask the phone first; with no tap within `decisionTimeoutMs` (default 2 minutes) the card says "the wait ran out" and the request moves to the app. With no app connected, the request waits in the Gateway for someone to connect — `phone-first` is what makes the phone actually participate.
+
 If the question was already answered on the PC, the tap gets "no longer pending" and sends nothing.
 
 ## Media

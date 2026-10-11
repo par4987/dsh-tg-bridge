@@ -76,6 +76,15 @@ export interface Config {
   coalesceBusyMs: number
   /** Close a session's thread after this many idle days. 0 = never. */
   archiveAfterDays: number
+  /**
+   * Which surface answers approvals and questions first: the connected UI
+   * (the profile's remote clients — the Desktop or Web app), or this bridge.
+   * `phone-first` claims them ahead of the remote forwarder; unanswered
+   * claims fall back to the UI after `decisionTimeoutMs`.
+   */
+  decisions: 'app-first' | 'phone-first'
+  /** How long a `phone-first` claim waits for a tap before delegating to the UI, in milliseconds. */
+  decisionTimeoutMs: number
   render: RenderOptions
   stt: SttConfig
   /** Interface language for the bot's own messages. */
@@ -100,6 +109,8 @@ export const Config: Schema<Config> = Schema.object({
   coalesceMs: Schema.number().min(200).max(10_000).default(2000),
   coalesceBusyMs: Schema.number().min(2000).max(30_000).default(8000),
   archiveAfterDays: Schema.number().min(0).default(0),
+  decisions: Schema.union(['app-first', 'phone-first'] as const).default('app-first'),
+  decisionTimeoutMs: Schema.number().min(10_000).max(1_800_000).default(120_000),
   render: Schema.object({
     editIntervalMs: Schema.number().min(200).default(1400),
     showDiffs: Schema.boolean().default(true),

@@ -29,7 +29,7 @@ export const localeChecks: Check[] = [
       'send_done', 'sessions_header', 'projects_created', 'context_hint', 'clearqueue_done',
       'commands_ok', 'perms_done', 'skills_detail', 'skill_frame', 'agents_selected',
       'menu_header', 'status_leader', 'delthread_done', 'taskcancel_none', 'files_dir',
-      'files_too_big', 'ffind_none',
+      'files_too_big', 'ffind_none', 'approval_delegated', 'question_delegated',
     ]
     for (const key of probes) {
       const value = t(key)

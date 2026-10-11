@@ -74,6 +74,11 @@ export interface AnswererDeps {
   threadOf: (sessionId: string) => number | undefined
   /** Reports a contained send failure to the host logger. */
   notify: (error: unknown) => void
+  /**
+   * How long a claimed request waits for a phone tap before delegating to
+   * the next answerer (the connected UI). Zero waits forever.
+   */
+  decisionTimeoutMs: number
 }
 
 export class AnswererHub {
@@ -108,19 +113,33 @@ export class AnswererHub {
     const text = `${header}${reason}`
     return new Promise<ApprovalOutcome>((resolve) => {
       let settled = false
-      const settle = (outcome: ApprovalOutcome): void => {
+      // The card message id arrives after send; the callbacks carry it.
+      let cardMessageId = -1
+      let timer: ReturnType<typeof setTimeout> | undefined
+      /** One settlement path: retire the card, stop the clock, then finish. */
+      const end = (finish: () => void): void => {
         if (settled) return
         settled = true
+        if (timer !== undefined) clearTimeout(timer)
         this.cards.drop(cardMessageId)
+        finish()
+      }
+      const settle = (outcome: ApprovalOutcome): void => end(() => {
         void this.finishCard(
           sessionId,
           cardMessageId,
           `${text}\n${outcome === 'allowed-once' ? t('approval_allowed') : t('approval_rejected')}`,
         )
         resolve(outcome)
-      }
-      // The card message id arrives after send; the callback carries it.
-      let cardMessageId = -1
+      })
+      /** The phone stayed silent past the timeout: hand the request to the next answerer. */
+      const delegate = (): void => end(() => {
+        if (cardMessageId >= 0) {
+          void this.finishCard(sessionId, cardMessageId, `${text}\n${t('approval_delegated')}`)
+        }
+        void Promise.resolve(next()).then(resolve, () => resolve('unavailable'))
+      })
+      if (this.deps.decisionTimeoutMs > 0) timer = setTimeout(delegate, this.deps.decisionTimeoutMs)
       const data = (allow: boolean): string => `a:${allow ? 'y' : 'n'}`
       void this.deps.telegram
         .sendMessage(this.deps.chatId, chunkHtml(text)[0] ?? text, {
@@ -136,6 +155,9 @@ export class AnswererHub {
             settle('unavailable')
             return
           }
+          // A timeout may have delegated while the card was in flight; its
+          // buttons then say "no longer pending" instead of resolving nothing.
+          if (settled) return
           cardMessageId = messageId
           this.cards.set(messageId, { kind: 'approval', resolve: settle, messageId })
         })
@@ -158,13 +180,29 @@ export class AnswererHub {
     const questions = req.questions
     return new Promise<AskUserQuestionAnswer>((resolve) => {
       const answers = new Map<string, AskUserQuestionAnswerItem>()
+      /** This request's card messages, so any ending retires them all. */
+      const cardIds: number[] = []
       let settled = false
-      const settle = (): void => {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      /** One settlement path: retire the cards, stop the clock, then finish. */
+      const end = (finish: () => void): void => {
         if (settled) return
         settled = true
-        if (sessionId !== undefined) this.dropFreeText(sessionId)
-        resolve({ answers: questions.map((question) => answers.get(question.id) ?? { id: question.id, selected: [] }) })
+        if (timer !== undefined) clearTimeout(timer)
+        for (const id of cardIds) this.cards.drop(id)
+        this.dropFreeText(sessionId)
+        finish()
       }
+      const settle = (): void => end(() => {
+        resolve({ answers: questions.map((question) => answers.get(question.id) ?? { id: question.id, selected: [] }) })
+      })
+      /** The phone stayed silent past the timeout: hand the request to the next answerer. */
+      const delegate = (): void => end(() => {
+        for (const id of cardIds) void this.finishCard(sessionId, id, t('question_delegated'))
+        void Promise.resolve(next()).then(resolve, () =>
+          resolve({ answers: questions.map((question) => ({ id: question.id, selected: [] })) }))
+      })
+      if (this.deps.decisionTimeoutMs > 0) timer = setTimeout(delegate, this.deps.decisionTimeoutMs)
       const submitAnswer = (questionId: string, answer: AskUserQuestionAnswerItem): void => {
         if (answers.has(questionId)) return
         answers.set(questionId, answer)
@@ -192,7 +230,7 @@ export class AnswererHub {
 
         if (options.length === 0) {
           // Nothing to tap: arm free text as the answer channel.
-          void this.armFreeText(sessionId, thread, text, question.id, false, submitAnswer, req, settle)
+          void this.armFreeText(sessionId, thread, text, question.id, false, submitAnswer, req, settle, () => settled)
           continue
         }
 
@@ -215,7 +253,8 @@ export class AnswererHub {
             replyMarkup: keyboard(rows),
           })
           .then((messageId) => {
-            if (messageId === null) return
+            if (messageId === null || settled) return
+            cardIds.push(messageId)
             this.cards.set(messageId, {
               kind: 'question',
               answers,
@@ -243,11 +282,14 @@ export class AnswererHub {
     submitAnswer: (questionId: string, answer: AskUserQuestionAnswerItem) => void,
     _req: AskUserQuestionRequestEvent,
     settle: () => void,
+    isSettled: () => boolean = () => false,
   ): void {
     void this.deps.telegram
       .sendMessage(this.deps.chatId, chunkHtml(text)[0] ?? text, thread === undefined ? { parseMode: 'HTML' } : { parseMode: 'HTML', messageThreadId: thread })
       .then(() => {
-        if (this.freeText.has(sessionId)) return
+        // A timeout may have delegated while the arm was in flight; the
+        // thread's next message must not feed a dead request.
+        if (isSettled() || this.freeText.has(sessionId)) return
         this.freeText.set(sessionId, {
           questionId,
           multiSelect,

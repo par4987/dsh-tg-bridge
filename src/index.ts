@@ -532,10 +532,16 @@ export function apply(ctx: Context, config: Config): void {
     chatId,
     threadOf,
     notify: (error) => log('warn', 'answerer', error),
+    // A timeout belongs only to a claiming bridge: in app-first the request
+    // already reached the bridge through the UI's own delegation.
+    decisionTimeoutMs: config.decisions === 'phone-first' ? config.decisionTimeoutMs : 0,
   })
 
-  ctx.on('approval/request', (request, next) => answerers.approval(request, next))
-  ctx.on('user-questions/request', (request, next) => answerers.questions(request, next))
+  // `phone-first` jumps ahead of the api-remotes forwarder, so mirrored
+  // sessions ask the phone before the connected Desktop/Web UI.
+  const decisionOptions = config.decisions === 'phone-first' ? ({ prepend: true } as const) : undefined
+  ctx.on('approval/request', (request, next) => answerers.approval(request, next), decisionOptions)
+  ctx.on('user-questions/request', (request, next) => answerers.questions(request, next), decisionOptions)
 
   // ── prompts ────────────────────────────────────────────────────────────────
 
