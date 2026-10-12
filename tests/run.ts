@@ -12,6 +12,7 @@ import { streamChecks } from './stream.check.ts'
 import { answererChecks } from './answerers.check.ts'
 import { rebuildChecks } from './rebuild.check.ts'
 import { fsbrowseChecks } from './fsbrowse.check.ts'
+import { wizardChecks } from './wizard.check.ts'
 import type { Check } from './harness.ts'
 
 const checks: Check[] = [
@@ -26,6 +27,7 @@ const checks: Check[] = [
   ...answererChecks,
   ...rebuildChecks,
   ...fsbrowseChecks,
+  ...wizardChecks,
 ]
 
 let failed = 0

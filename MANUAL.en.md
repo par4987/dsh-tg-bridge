@@ -60,7 +60,7 @@ Cancels the session's running turn.
 The session's durable reminders (the harness's Schedule subsystem). If the profile does not compose Schedule, it says so honestly.
 
 ### `/newtask`
-The reminder wizard, step by step and persisted (a restart cannot eat it): name → prompt → type (once / daily / weekly / every N minutes) → detail (`2026-12-01 09:00`, `09:00`, `mon 09:00`, or a number) → confirmation. `… cancel` aborts. The reminder is created with the same durable domain the model uses, so the Web sees it too and it survives restarts; when it fires, it arrives as one more turn of the session with a `⏰` notice in the thread.
+The reminder wizard, step by step and persisted (a restart cannot eat it): name → prompt → type (once / daily / weekly / every N minutes) → detail (`2026-12-01 09:00`, `09:00`, `mon 09:00`, or a number) → confirmation. `… cancel` aborts. The draft lives in the bridge's `state.json`, so you resume the wizard where you left it after a restart. The reminder is created with the same durable domain the model uses, so the Web sees it too and it survives restarts; when it fires, it arrives as one more turn of the session with a `⏰` notice in the thread.
 
 ### `/locale es|en`
 Switches the bot's language and persists it.
@@ -74,8 +74,17 @@ Sessions with a turn in flight in this process.
 ### `/export`
 The session's durable log as a `.jsonl` document (raw events, exported through `sessionQuery.readSession`).
 
-### `/rename <title>`
-Pins the title through the official `session/title` event with a `user` source — the Web sees it too, and automatic title generation stops rescheduling. The Telegram thread renames with it.
+### `/rename [title]`
+With a title, pins it through the official `session/title` event with a `user` source — the Web sees it too, and automatic title generation stops rescheduling. The Telegram thread renames with it. **With no argument, it regenerates**: calls the harness's `sessionTitle.refresh`, which unpins the current title and derives a new one (the honest counterpart of opencode's three suggestions — here the service gives you one, the right one).
+
+### `/instructions [add <text> | clear]`
+The folder's notes: reads, appends to, or empties `AGENTS.local.md` in the session's cwd — the file the harness re-injects as local instruction for every session in that folder. A semantic shift from opencode (a per-session key/value store): here it is one markdown file shared by the whole project, and every `add` says so.
+
+### `/config [model …]`
+Without arguments, the summary that matters on the phone: the default model for new sessions (with its reasoning effort) and the bridge's facts (mode, mirror, decision routing, language, archive window). `/config model` sends the route picker — one tap pins the default for new sessions (`agentDefaultModel.saveSelection`); `/config model <provider>/<model>` does it directly. A session already running keeps its route — that is what `/models` is for.
+
+### `/fork [id]`
+Forks the session at its last completed turn — the same cut the Web makes: the child inherits the balanced events up to that `turn/end` (`seed` + `inheritedEventCount`), records the lineage (`isSeeded`, `parentSession`, same cwd), and its thread is born with the first message. Without an argument it forks the thread's session; with an id or prefix, that one. A session with no completed turn is refused honestly.
 
 ### `/note <text>`
 A silent note into the transcript (`agent.inject()`): the agent sees it on its next turn, without waking now.

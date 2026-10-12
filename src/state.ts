@@ -39,6 +39,8 @@ interface StoredState {
   rootTarget?: string
   /** Interface language remembered across restarts. */
   locale?: 'es' | 'en'
+  /** In-flight reminder-wizard drafts, sessionId -> draft. */
+  wizardDrafts?: Record<string, WizardDraft>
 }
 
 /** Token usage carried by one committed assistant message. */
@@ -46,6 +48,23 @@ export interface UsageDelta {
   inputTokens: number
   outputTokens: number
   totalTokens: number
+}
+
+/**
+ * One in-flight reminder-wizard draft, persisted per session so a profile
+ * restart keeps the conversation mid-wizard instead of losing it.
+ */
+export interface WizardDraft {
+  /** Which question the wizard is asking next. */
+  step: 'name' | 'prompt' | 'type' | 'detail' | 'confirm'
+  /** The reminder name, once answered. */
+  name: string
+  /** The prompt the agent will run, once answered. */
+  prompt: string
+  /** The cadence picked so far. */
+  type?: 'once' | 'daily' | 'weekly' | 'minutes'
+  /** The cadence detail (date, time, or interval), once answered. */
+  detail?: string
 }
 
 /**
@@ -68,6 +87,8 @@ export class BridgeState {
         .filter(([, mapping]) => mapping !== null && typeof mapping === 'object'))
       this.rootTarget = parsed.rootTarget
       this.locale = parsed.locale === 'es' || parsed.locale === 'en' ? parsed.locale : undefined
+      this.drafts = new Map(Object.entries(parsed.wizardDrafts ?? {})
+        .filter(([, draft]) => draft !== null && typeof draft === 'object'))
     } catch {
       /* first run or a corrupt file — start empty */
     }
@@ -76,14 +97,18 @@ export class BridgeState {
   private sessions = new Map<string, MappedSession>()
   private rootTarget: string | undefined
   private locale: 'es' | 'en' | undefined
+  private drafts = new Map<string, WizardDraft>()
 
   private persist(): void {
     try {
       mkdirSync(dirname(this.file), { recursive: true })
       const sessions: Record<string, MappedSession> = {}
       for (const [id, mapping] of this.sessions) sessions[id] = mapping
+      const wizardDrafts: Record<string, WizardDraft> = {}
+      for (const [id, draft] of this.drafts) wizardDrafts[id] = draft
       const payload: StoredState = {
         sessions,
+        wizardDrafts,
         ...(this.rootTarget === undefined ? {} : { rootTarget: this.rootTarget }),
         ...(this.locale === undefined ? {} : { locale: this.locale }),
       }
@@ -270,6 +295,23 @@ export class BridgeState {
   setSavedLocale(locale: 'es' | 'en'): void {
     this.load()
     this.locale = locale
+    this.persist()
+  }
+
+  /** The session's in-flight wizard draft, when one survived a restart. */
+  wizardOf(sessionId: string): WizardDraft | undefined {
+    this.load()
+    return this.drafts.get(sessionId)
+  }
+
+  /** Save (or clear, with undefined) the session's in-flight wizard draft. */
+  setWizard(sessionId: string, draft: WizardDraft | undefined): void {
+    this.load()
+    if (draft === undefined) {
+      if (!this.drafts.delete(sessionId)) return
+    } else {
+      this.drafts.set(sessionId, draft)
+    }
     this.persist()
   }
 

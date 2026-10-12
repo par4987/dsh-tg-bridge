@@ -27,7 +27,8 @@ import type { BridgeState } from './state.ts'
 import type { Config } from './config.ts'
 import { rebuildCandidates, scanSessionActivity, sessionsRoot, type RebuildCandidate } from './rebuild.ts'
 import { type FileSystemLike, type FsTargetLike, findEntries } from './fsbrowse.ts'
-import { matchScheduleRecord } from './schedmatch.ts'
+import { importSchedule, listTasks, matchScheduleRecord, startWizard } from './wizard.ts'
+import { parseModelArg } from './parsing.ts'
 import { escapeHtml, shortPath } from './render.ts'
 import { setLocale, t } from './locale.ts'
 import { safe } from './log.ts'
@@ -58,6 +59,12 @@ export interface FsCardEntry {
   size?: number
   target: FsTargetLike
 }
+
+/** What `/fork` can come back with: the child id, a refusal, or a source without a completed turn. */
+export type ForkOutcome =
+  | { id: string }
+  | { refusal: string }
+  | { error: 'no-turn' }
 
 /**
  * State bound to one card's message: what its buttons mean. A tap only ever
@@ -94,8 +101,8 @@ export interface CommandDeps {
   isLive: (sessionId: string) => boolean
   /** Sessions with a turn in flight in this process. */
   runningSessions: () => string[]
-  /** Send the `/models` route picker for a session (or the chat root). */
-  sendModelPicker: (sessionId: string | undefined, current: string | undefined, routes: ModelRoute[]) => Promise<void>
+  /** Send the `/models` route picker for a session (or the chat root); `default` pins the profile default instead. */
+  sendModelPicker: (sessionId: string | undefined, current: string | undefined, routes: ModelRoute[], purpose?: 'session' | 'default') => Promise<void>
   /** Feed a free-text answer to the armed question; false when none is armed. */
   answerFreeText: (sessionId: string, text: string) => boolean
   /** Deliver one text prompt to a session (followup/steer by its status). */
@@ -112,6 +119,8 @@ export interface CommandDeps {
   rebindCard: (messageId: number, text: string, payload: CardPayload) => Promise<void>
   /** Bridge self-report for `/status`. */
   bridgeStatus: () => { mode: string, leading: boolean, profile: string, mapped: number, running: number }
+  /** Fork a session at its last completed turn; returns the child identity or why not. */
+  forkSession: (sessionId: string) => Promise<ForkOutcome>
 }
 
 /** The session-query surface `/rebuild` and `/export` read (base mounts it). */
@@ -451,11 +460,28 @@ export async function handleCommand(
 
     case 'rename': {
       const title = args.trim()
-      if (title.length === 0) return t('rename_usage')
       const id = targetSession
       if (id === undefined) return t('msg_no_target')
       const resolved = await deps.resolveAgent(id)
       if (resolved.agent === undefined) return resolved.refusal ?? t('history_none')
+      // No argument: regenerate instead of suggest — the harness refresh
+      // unpins the title and re-derives one; opencode's three suggestions
+      // have no counterpart here.
+      if (title.length === 0) {
+        const titles = ctx.get('sessionTitle') as
+          | { refresh: (session: unknown, signal?: AbortSignal) => Promise<{ title: string } | undefined> }
+          | undefined
+        if (titles === undefined) return t('rename_suggest_none')
+        const snapshot = await titles.refresh(resolved.agent.session, AbortSignal.timeout(90_000))
+          .catch(() => undefined)
+        if (snapshot === undefined || snapshot.title.trim().length === 0) return t('rename_suggest_none')
+        state.setTitle(id, snapshot.title.slice(0, 60))
+        const thread = state.threadOf(id)
+        if (thread !== undefined) {
+          await deps.telegram.editForumTopic(deps.chatId, thread, snapshot.title.slice(0, 60))
+        }
+        return t('rename_suggested', { title: escapeHtml(snapshot.title.slice(0, 60)) })
+      }
       // The harness's own explicit-rename record: pins the title and stops
       // automatic scheduling — the web UI reads the same event.
       resolved.agent.session.append('session/title', {
@@ -563,7 +589,7 @@ export async function handleCommand(
     case 'newtask': {
       const id = targetSession
       if (id === undefined) return t('msg_no_target')
-      return startWizard(id, args.trim())
+      return startWizard(deps, id, args.trim())
     }
 
     case 'taskcancel': {
@@ -970,6 +996,114 @@ export async function handleCommand(
       }
     }
 
+    case 'instructions': {
+      const id = targetSession
+      if (id === undefined) return t('msg_no_target')
+      const fs = ctx.get('fs') as FileSystemLike | undefined
+      if (fs === undefined) return t('files_unavailable')
+      const cwd = (await deps.sessionCwd(id)) ?? deps.workspaceDir()
+      const arg = args.trim()
+      try {
+        const target = await fs.resolve(join(cwd, 'AGENTS.local.md'), { cwd })
+        if (arg === 'clear' || arg === 'limpiar') {
+          await fs.writeText(target, '')
+          return t('instructions_cleared')
+        }
+        if (arg.startsWith('add') && arg.length > 4) {
+          const text = arg.slice(4).trim()
+          if (text.length === 0) return t('instructions_usage')
+          let current = ''
+          try {
+            current = await fs.readText(target)
+          } catch {
+            /* no file yet: the note starts it */
+          }
+          await fs.writeText(target, `${current.trim().length > 0 ? `${current.trimEnd()}\n` : ''}- ${text}\n`)
+          return t('instructions_added', { text: escapeHtml(text.slice(0, 90)) })
+        }
+        if (arg.length > 0) return t('instructions_usage')
+        let current: string
+        try {
+          current = (await fs.readText(target)).trim()
+        } catch {
+          return t('instructions_none')
+        }
+        if (current.length === 0) return t('instructions_none')
+        return t('instructions_body', {
+          cwd: escapeHtml(shortPath(cwd, 40)),
+          content: escapeHtml(current.slice(0, 2400)),
+        })
+      } catch (error) {
+        return t('instructions_fail', { detail: escapeHtml(safe(error).slice(0, 160)) })
+      }
+    }
+
+    case 'config': {
+      const arg = args.trim()
+      if (arg.startsWith('model')) {
+        const rest = arg.slice(5).trim()
+        if (rest.length === 0) {
+          const selection = ctx.agentDefaultModel.currentSelection()
+          const routes: ModelRoute[] = []
+          for (const provider of ctx.llm.listProviders()) {
+            for (const model of await ctx.llm.listModels(provider.id)) {
+              routes.push({ provider: provider.id, model: model.id })
+            }
+          }
+          await deps.sendModelPicker(targetSession, t('config_model_current', {
+            provider: escapeHtml(selection.provider),
+            model: escapeHtml(selection.model),
+          }), routes, 'default')
+          return undefined
+        }
+        const parsed = parseModelArg(rest)
+        if (parsed === undefined) return t('config_model_usage')
+        try {
+          const current = ctx.agentDefaultModel.currentSelection()
+          await ctx.agentDefaultModel.saveSelection({
+            provider: parsed.provider,
+            model: parsed.model,
+            ...(current.reasoningEffort !== undefined ? { reasoningEffort: current.reasoningEffort } : {}),
+          })
+          return t('config_model_set', { provider: escapeHtml(parsed.provider), model: escapeHtml(parsed.model) })
+        } catch (error) {
+          return t('config_model_fail', { detail: escapeHtml(safe(error).slice(0, 160)) })
+        }
+      }
+      if (arg.length > 0) return t('config_usage')
+      const selection = ctx.agentDefaultModel.currentSelection()
+      return [
+        t('config_header'),
+        t('config_model_line', {
+          provider: escapeHtml(selection.provider),
+          model: escapeHtml(selection.model),
+          effort: selection.reasoningEffort !== undefined
+            ? t('config_effort', { effort: escapeHtml(selection.reasoningEffort) })
+            : '',
+        }),
+        t('config_facts', {
+          mode: escapeHtml(deps.config.mode),
+          mirror: escapeHtml(deps.config.mirror),
+          decisions: escapeHtml(deps.config.decisions),
+          locale: deps.config.locale,
+          days: deps.config.archiveAfterDays,
+        }),
+      ].join('')
+    }
+
+    case 'fork': {
+      const id = args.trim().length > 0 ? state.sessionByPrefix(args.trim()) : targetSession
+      if (id === undefined) return t('fork_usage')
+      const outcome = await deps.forkSession(id)
+      if ('error' in outcome && outcome.error === 'no-turn') return t('fork_no_turn')
+      if ('refusal' in outcome) return outcome.refusal
+      if (!('id' in outcome)) return t('fork_usage')
+      const parentTitle = state.titleOf(id) ?? id.slice(0, 18)
+      state.setTitle(outcome.id, `🌱 ${parentTitle}`.slice(0, 60))
+      void deps.ensureThread(outcome.id)
+      return t('fork_done', { id: outcome.id })
+    }
+
     case 'locale': {
       const wanted = args.trim().toLowerCase()
       if (wanted !== 'es' && wanted !== 'en') return t('locale_usage')
@@ -1273,190 +1407,3 @@ export async function handleCardCallback(
   return false
 }
 
-// ── tasks and the /newtask wizard ────────────────────────────────────────────
-
-type WizardStep = 'name' | 'prompt' | 'type' | 'detail' | 'confirm'
-
-interface Wizard {
-  step: WizardStep
-  name: string
-  prompt: string
-  type?: 'once' | 'daily' | 'weekly' | 'minutes'
-  detail?: string
-}
-
-const wizards = new Map<string, Wizard>()
-
-async function listTasks(deps: CommandDeps, sessionId: string): Promise<string> {
-  const resolved = await deps.resolveAgent(sessionId)
-  if (resolved.agent === undefined) return resolved.refusal ?? t('history_none')
-  const agent = resolved.agent
-  const schedule = await importSchedule()
-  if (schedule === undefined) return t('tasks_unavailable')
-  await deps.ctx.sessions.flush(agent.session)
-  const folded = schedule.foldScheduleEvents(agent.session.snapshotEvents())
-  if (folded.active.length === 0) return t('tasks_none')
-  const lines = folded.active.map((record) => {
-    const view = schedule.scheduleView(record, Date.now())
-    const next = (view as { nextAt?: string }).nextAt
-    const suffix = next !== undefined && next !== null ? t('task_next', { when: next }) : ''
-    return `${t('task_entry', { prompt: escapeHtml(record.prompt.slice(0, 80)) })}${suffix}`
-  })
-  return `${t('tasks_header', { n: folded.active.length })}${lines.join('')} `
-}
-
-type ScheduleModule = typeof import('@deepseek-ai/dsh-schedule')
-
-async function importSchedule(): Promise<ScheduleModule | undefined> {
-  try {
-    return (await import('@deepseek-ai/dsh-schedule')) as ScheduleModule
-  } catch {
-    // The profile does not compose the Schedule subsystem; say so honestly.
-    return undefined
-  }
-}
-
-function startWizard(sessionId: string, args: string): string {
-  if (args === 'cancelar' || args === 'cancel') return t('newtask_cancelled')
-  if (wizards.has(sessionId)) return t('newtask_taken')
-  const wizard: Wizard = { step: 'name', name: '', prompt: '' }
-  wizards.set(sessionId, wizard)
-  return t('newtask_name')
-}
-
-const CANCEL = ['cancelar', 'cancel', '/newtask cancelar', '/newtask cancel']
-const YES = ['sí', 'si', 'yes', '/newtask sí', '/newtask si', '/newtask yes', '1', 'y']
-
-/**
- * Feed one plain message into the wizard running for a session.
- * @returns the wizard's reply when the message was consumed, or undefined
- *   when no wizard is running there.
- */
-export async function feedWizard(deps: CommandDeps, sessionId: string, text: string): Promise<string | undefined> {
-  const wizard = wizards.get(sessionId)
-  if (wizard === undefined) return undefined
-  const trimmed = text.trim()
-  if (CANCEL.includes(trimmed.toLowerCase())) {
-    wizards.delete(sessionId)
-    return t('newtask_cancelled')
-  }
-  switch (wizard.step) {
-    case 'name':
-      wizard.name = trimmed.slice(0, 60)
-      wizard.step = 'prompt'
-      return t('newtask_prompt')
-    case 'prompt':
-      wizard.prompt = trimmed
-      wizard.step = 'type'
-      return `${t('newtask_type')}${t('newtask_types')}`
-    case 'type': {
-      const index = Number(trimmed)
-      const types = ['once', 'daily', 'weekly', 'minutes'] as const
-      if (!Number.isInteger(index) || index < 1 || index > types.length) return t('newtask_bad')
-      const picked = types[index - 1]
-      if (picked === undefined) return t('newtask_bad')
-      wizard.type = picked
-      wizard.step = 'detail'
-      if (wizard.type === 'once') return t('newtask_detail_once')
-      if (wizard.type === 'daily') return t('newtask_detail_daily')
-      if (wizard.type === 'weekly') return t('newtask_detail_weekly')
-      return t('newtask_detail_minutes')
-    }
-    case 'detail': {
-      wizard.detail = trimmed
-      wizard.step = 'confirm'
-      return t('newtask_confirm', { summary: escapeHtml(wizardSummary(wizard)) })
-    }
-    case 'confirm': {
-      if (!YES.includes(trimmed.toLowerCase())) return t('newtask_bad')
-      wizards.delete(sessionId)
-      return createReminder(deps, sessionId, wizard)
-    }
-  }
-  return undefined
-}
-
-function wizardSummary(wizard: Wizard): string {
-  const detail = wizard.detail ?? ''
-  if (wizard.type === 'once') return `${wizard.prompt}\n${t('sched_once', { at: detail })}`
-  if (wizard.type === 'daily') return `${wizard.prompt}\n${t('sched_daily', { time: detail })}`
-  if (wizard.type === 'weekly') {
-    return `${wizard.prompt}\n${t('sched_weekly', { weekday: detail.split(' ')[0] ?? '?', time: detail.split(' ')[1] ?? '?' })}`
-  }
-  return `${wizard.prompt}\n${t('sched_mins', { n: Number(detail) || 0 })}`
-}
-
-/**
- * Append the wizard's record the way the model-facing schedule tool does:
- * flush, fold, allocate, validate through the schedule domain, append the
- * durable `schedule/change` create, flush again.
- */
-async function createReminder(deps: CommandDeps, sessionId: string, wizard: Wizard): Promise<string> {
-  const resolved = await deps.resolveAgent(sessionId)
-  if (resolved.agent === undefined) return resolved.refusal ?? t('history_none')
-  const agent = resolved.agent
-  const schedule = await importSchedule()
-  if (schedule === undefined) return t('tasks_unavailable')
-  try {
-    await deps.ctx.sessions.flush(agent.session)
-    const folded = schedule.foldScheduleEvents(agent.session.snapshotEvents())
-    const id = schedule.allocateScheduleId(folded)
-    const now = Date.now()
-    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
-    const detail = wizard.detail ?? ''
-    let record
-    if (wizard.type === 'minutes') {
-      const minutes = Math.round(Number(detail))
-      if (!Number.isFinite(minutes) || minutes < 1) return t('newtask_bad')
-      record = schedule.createEveryScheduleRecord(id, `${wizard.name}: ${wizard.prompt}`, minutes * 60, now)
-    } else {
-      const once = splitOnceDetail(detail)
-      if (once === undefined) return t('newtask_bad')
-      record = schedule.createAtScheduleRecord(id, `${wizard.name}: ${wizard.prompt}`, { date: once.date, time: once.time, time_zone: timeZone }, now)
-    }
-    agent.session.append('schedule/change', {
-      version: 1,
-      operation: 'create',
-      schedule: record,
-    })
-    await deps.ctx.sessions.flush(agent.session)
-    return t('task_created', { summary: escapeHtml(wizardSummary(wizard)) })
-  } catch (error) {
-    return t('task_fail', { detail: escapeHtml(safe(error)) })
-  }
-}
-
-/** `2026-12-01 09:00` / `01/12 09:00` / `lun 09:00` → the pair the record wants. */
-function splitOnceDetail(detail: string): { date: string, time: string } | undefined {
-  const iso = /^(\d{4}-\d{2}-\d{2})[ t](\d{1,2}:\d{2})$/.exec(detail.trim())
-  if (iso !== null) return { date: iso[1] ?? '', time: iso[2] ?? '' }
-  const regional = /^(\d{1,2})\/(\d{1,2})[ t](\d{1,2}):(\d{2})$/.exec(detail.trim())
-  if (regional !== null) {
-    // Day/month, the order the region writes: "01/12" is December 1st.
-    const now = new Date()
-    const candidate = new Date(now.getFullYear(), Number(regional[2]) - 1, Number(regional[1]))
-    if (candidate.getTime() < now.getTime()) candidate.setFullYear(candidate.getFullYear() + 1)
-    const p2 = (n: number): string => String(n).padStart(2, '0')
-    return {
-      date: `${candidate.getFullYear()}-${p2(Number(regional[2]))}-${p2(Number(regional[1]))}`,
-      time: `${(regional[3] ?? '').padStart(2, '0')}:${regional[4]}`,
-    }
-  }
-  const weekly = /^([a-záé]{2,9})\s+(\d{1,2}:\d{2})$/.exec(detail.trim().toLowerCase())
-  if (weekly !== null) {
-    // The next occurrence of that weekday.
-    const days = t('days_short').split(',')
-    const target = days.indexOf(weekly[1] ?? '')
-    if (target >= 0) {
-      const date = new Date()
-      const parts = (weekly[2] ?? '0:0').split(':')
-      date.setHours(Number(parts[0]), Number(parts[1]), 0, 0)
-      let add = (target - date.getDay() + 7) % 7
-      if (add === 0 && date.getTime() <= Date.now()) add = 7
-      date.setDate(date.getDate() + add)
-      const p2 = (n: number): string => String(n).padStart(2, '0')
-      return { date: `${date.getFullYear()}-${p2(date.getMonth() + 1)}-${p2(date.getDate())}`, time: weekly[2] ?? '' }
-    }
-  }
-  return undefined
-}

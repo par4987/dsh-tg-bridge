@@ -26,6 +26,8 @@ export interface FileSystemLike {
   resolve(path: string, opts?: { cwd?: string, signal?: AbortSignal }): Promise<FsTargetLike>
   listDir(target: FsTargetLike, signal?: AbortSignal): Promise<FsDirEntryLike[]>
   readText(target: FsTargetLike, signal?: AbortSignal): Promise<string>
+  /** `expected` mirrors the service positionally: an FsWriteIntent or undefined for an unconditional write. */
+  writeText(target: FsTargetLike, content: string, expected?: unknown, signal?: AbortSignal): Promise<unknown>
 }
 
 /** One match `/ffind` reports. */

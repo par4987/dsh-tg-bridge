@@ -19,6 +19,7 @@ It runs **inside** the dsh profile's process as a Cordis bundle, over the docume
 - **Reminders** (`/newtask`, `/tasks`, `/taskcancel`) on the harness's Schedule subsystem — created and deleted with the same durable domain the model-facing tools use.
 - **Phone navigation**: `/menu` (hub), `/sessions` (full corpus), `/projects` (workspaces, one tap opens a session), `/send` (talk to another session), `/files`/`/ffind` (browse and find files of the session's folder).
 - **Inspection**: `/usage` (right now), `/context` (occupancy, compactions, last summary), `/commands` (the harness's own, no model), `/perms` (one-tap presets), `/skills`·`/skill`, `/agents`, `/status`, `/delthread`.
+- **Control**: `/instructions` (notes in the folder's `AGENTS.local.md`), `/config` (model default with picker), `/rename` with no argument (regenerates the title), `/fork` (forks at the last turn), `/newtask` with a draft that survives restarts.
 - **`/models`**, **`/usagestats`** with per-turn and accumulated tokens, **`/ls`**, **`/use`**, **`/history`**, **`/queue`**, **`/clearqueue`**, **`/archive`**, **`/kill`**, **`/find`**.
 
 The complete manual lives in [`MANUAL.en.md`](MANUAL.en.md) (English) / [`MANUAL.md`](MANUAL.md) (Español).

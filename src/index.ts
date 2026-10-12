@@ -31,7 +31,7 @@ import type {} from '@deepseek-ai/dsh-user-questions'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import { createUserMessage, expandAssistantStream, type ContentBlock, type LlmCallConfig } from '@deepseek-ai/dsh-llm'
 import type { AgentHandle, AgentOptions, ModelSelection } from '@deepseek-ai/dsh-agent'
-import type { SessionId, Session } from '@deepseek-ai/dsh-session'
+import { SessionLogOffset, type SessionId, type Session } from '@deepseek-ai/dsh-session'
 import { AttachmentStore, type FileAttachmentRef, type SaveImageAttachment } from '@deepseek-ai/dsh-attachment'
 // Side-effect type import: declares ctx.sessionPersistence for the injected service.
 import type {} from '@deepseek-ai/dsh-session-persistence'
@@ -44,9 +44,10 @@ import { BridgeState } from './state.ts'
 import { TurnRenderer } from './stream.ts'
 import { AnswererHub } from './answerers.ts'
 import {
-  handleCommand, handleCardCallback, feedWizard,
-  type CardButton, type CardPayload, type CommandDeps, type ResolvedAgent,
+  handleCommand, handleCardCallback,
+  type CardButton, type CardPayload, type CommandDeps, type ForkOutcome, type ResolvedAgent,
 } from './commands.ts'
+import { feedWizard } from './wizard.ts'
 import { acquireLock, beatProfile, clearProfileBeat, heartbeat, isElsewhereLive, releaseLock, LOCK_INTERVAL_MS } from './ownership.ts'
 import { downloadsDir, decodeText, isTextLike, saveBinary, DOC_MAX_CHARS } from './ingest.ts'
 import { sttAvailable, transcribeFile } from './stt.ts'
@@ -218,6 +219,49 @@ export function apply(ctx: Context, config: Config): void {
     state.claim(sessionId, myProfile)
     state.touchIdle(sessionId)
     return sessionId
+  }
+
+  /**
+   * Fork a session at its last completed turn — the same cut the Web UI's
+   * fork makes: seed the child with the balanced prefix up to that turn/end
+   * and record the lineage (`isSeeded`, `parentSession`, the shared cwd).
+   */
+  async function forkSession(sessionId: string): Promise<ForkOutcome> {
+    const resolved = await resolveAgent(sessionId)
+    if (resolved.agent === undefined) return { refusal: resolved.refusal ?? t('resume_none') }
+    const events = resolved.agent.session.snapshotEvents()
+    const boundary = events.findLast((event) => event.type === 'turn/end')
+    if (boundary === undefined) return { error: 'no-turn' }
+    const cut = boundary.seq + 1
+    const childId = `session-${randomUUID()}`
+    let cwd: string | undefined
+    try {
+      const stat = await ctx.sessionPersistence.stat(brandString<SessionId>(sessionId))
+      cwd = stat?.header.cwd
+    } catch {
+      /* a source without a readable header keeps the bridge's own workspace default */
+    }
+    try {
+      const handle = await ctx.agents.create({
+        sessionId: brandString<SessionId>(childId),
+        seed: events.slice(0, cut),
+        inheritedEventCount: SessionLogOffset(cut),
+        meta: {
+          ...(cwd === undefined ? {} : { cwd }),
+          parentSession: brandString<SessionId>(sessionId),
+          isSeeded: true,
+        },
+        agentOptions: defaultAgentOptions(),
+      })
+      owned.set(childId, handle)
+      liveStatus.set(childId, 'idle')
+      state.claim(childId, myProfile)
+      state.touchIdle(childId)
+      return { id: childId }
+    } catch (error) {
+      log('warn', 'fork failed', error)
+      return { refusal: t('fork_fail', { detail: safe(error).slice(0, 200) }) }
+    }
   }
 
   // ── topics ──────────────────────────────────────────────────────────────────
@@ -779,18 +823,24 @@ export function apply(ctx: Context, config: Config): void {
   /** Route lists bound to each `/models` card, addressed by callback index. */
   const modelCards = new MessageCards<Array<{ provider: string, model: string }>>(10)
 
-  /** The `/models` picker: current route plus one button per route. */
+  /**
+   * The `/models` picker: current route plus one button per route. With
+   * `purpose: 'default'` the same card pins the profile's default route for
+   * new sessions (`/config model`) instead of this session's next request.
+   */
   async function sendModelPicker(
     sessionId: string | undefined,
     current: string | undefined,
     routes: Array<{ provider: string, model: string }>,
+    purpose: 'session' | 'default' = 'session',
   ): Promise<void> {
-    const lines = [t('models_header')]
+    const lines = [purpose === 'default' ? t('config_model_header') : t('models_header')]
     if (current !== undefined) lines.push(current)
-    lines.push(t('models_pick'))
+    lines.push(purpose === 'default' ? t('config_model_pick') : t('models_pick'))
+    const prefix = purpose === 'default' ? 'd:' : 'm:'
     const rows = routes.slice(0, 30).map((route, index) => [{
       text: `${route.provider}/${route.model}`.slice(0, 60),
-      callback_data: `m:${index}`,
+      callback_data: `${prefix}${index}`,
     }])
     const thread = sessionId !== undefined ? state.threadOf(sessionId) : undefined
     const messageId = await telegram.sendMessage(chatId, lines.join(''), {
@@ -801,9 +851,13 @@ export function apply(ctx: Context, config: Config): void {
     if (messageId !== null) modelCards.set(messageId, routes)
   }
 
-  /** One tap on the picker pins that route for the session's next request. */
+  /**
+   * One tap on the picker: `m:` pins that route for the session's next
+   * request; `d:` saves it as the profile's default for new sessions.
+   */
   async function handleModelCallback(payload: string, messageId: number | undefined, cqId: string, sessionId: string): Promise<boolean> {
-    if (!payload.startsWith('m:')) return false
+    const purpose = payload.startsWith('m:') ? 'session' : payload.startsWith('d:') ? 'default' : undefined
+    if (purpose === undefined) return false
     const routes = modelCards.get(messageId)
     const index = Number(payload.slice(2))
     if (routes === undefined || !Number.isInteger(index) || index < 0 || index >= routes.length) {
@@ -812,6 +866,26 @@ export function apply(ctx: Context, config: Config): void {
     }
     const route = routes[index]
     if (route === undefined) return true
+    if (purpose === 'default') {
+      modelCards.drop(messageId)
+      try {
+        const current = ctx.agentDefaultModel.currentSelection()
+        await ctx.agentDefaultModel.saveSelection({
+          provider: route.provider,
+          model: route.model,
+          ...(current.reasoningEffort !== undefined ? { reasoningEffort: current.reasoningEffort } : {}),
+        })
+        await telegram.answerCallbackQuery(cqId).catch(() => undefined)
+        await telegram.sendMessage(chatId, t('config_model_set', {
+          provider: escapeHtml(route.provider),
+          model: escapeHtml(route.model),
+        }), { parseMode: 'HTML' }).catch((error) => log('warn', 'default model receipt', error))
+      } catch (error) {
+        await telegram.answerCallbackQuery(cqId, t('config_model_fail', { detail: safe(error).slice(0, 160) }), true)
+          .catch(() => undefined)
+      }
+      return true
+    }
     modelCards.drop(messageId)
     pendingRoutes.set(sessionId, route)
     await telegram.answerCallbackQuery(cqId).catch(() => undefined)
@@ -888,6 +962,7 @@ export function apply(ctx: Context, config: Config): void {
     sendText: (sessionId, html) => send(sessionId, html),
     sendCard,
     rebindCard,
+    forkSession,
     bridgeStatus: () => ({
       mode: config.mode,
       leading,
@@ -1034,6 +1109,9 @@ export function apply(ctx: Context, config: Config): void {
       { command: 'queue', description: 'Session inbox' },
       { command: 'clearqueue', description: 'Empty the inbox' },
       { command: 'commands', description: 'Harness commands' },
+      { command: 'config', description: 'Config facts; default model' },
+      { command: 'instructions', description: 'AGENTS.local.md notes' },
+      { command: 'fork', description: 'Fork at last turn' },
       { command: 'perms', description: 'Permissions' },
       { command: 'skills', description: 'Skills' },
       { command: 'skill', description: 'Apply a skill' },

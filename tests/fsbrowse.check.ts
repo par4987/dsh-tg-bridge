@@ -1,7 +1,7 @@
 /** The file-browser walk, the reminder matcher, and the button layout. */
 import { assert, define, type Check } from './harness.ts'
 import { findEntries, type FsDirEntryLike, type FsTargetLike } from '../src/fsbrowse.ts'
-import { matchScheduleRecord } from '../src/schedmatch.ts'
+import { matchScheduleRecord } from '../src/wizard.ts'
 import { chunkButtons } from '../src/cards.ts'
 
 interface FakeEntry {

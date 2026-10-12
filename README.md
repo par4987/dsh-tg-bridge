@@ -17,6 +17,7 @@ Corre **dentro** del proceso del perfil de dsh como bundle Cordis, sobre los pun
 - **Recordatorios** (`/newtask`, `/tasks`, `/taskcancel`) sobre el subsistema Schedule del harness — los crea y borra con el mismo dominio durable que las herramientas model-facing.
 - **Navegación desde el teléfono**: `/menu` (tablero), `/sessions` (corpus completo), `/projects` (workspaces con un toque para abrir sesión), `/send` (hablarle a otra sesión), `/files`/`/ffind` (explorar y buscar archivos de la carpeta de la sesión).
 - **Inspección**: `/usage` (foto del momento), `/context` (ocupación, compactaciones y último resumen), `/commands` (los del harness, sin modelo), `/perms` (presets con un toque), `/skills`·`/skill`, `/agents`, `/status`, `/delthread`.
+- **Control**: `/instructions` (notas en `AGENTS.local.md` de la carpeta), `/config` (default de modelo con picker), `/rename` sin argumento (regenera el título), `/fork` (forkea en el último turno), `/newtask` con draft persistente entre reinicios.
 - **`/models`**, **`/usagestats`** con tokens por turno y acumulados, **`/ls`**, **`/use`**, **`/history`**, **`/queue`**, **`/clearqueue`**, **`/archive`**, **`/kill`**, **`/find`**.
 
 El manual completo está en [`MANUAL.md`](MANUAL.md) (Español) / [`MANUAL.en.md`](MANUAL.en.md) (English).

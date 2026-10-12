@@ -44,6 +44,24 @@ export const stateChecks: Check[] = [
     rmSync(dir, { recursive: true, force: true })
   }),
 
+  define('wizard drafts persist across a restart and clear on demand', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tg-bridge-state-'))
+    const first = new BridgeState(join(dir, 'state.json'))
+    first.setWizard('ses-1', { step: 'prompt', name: 'Regaderas', prompt: '' })
+    first.flushNow()
+    // A restart reads the same file: the wizard conversation resumes.
+    const second = new BridgeState(join(dir, 'state.json'))
+    const draft = second.wizardOf('ses-1')
+    assert(draft !== undefined, 'the draft survived the restart')
+    assert(draft?.step === 'prompt', 'the wizard waits at the prompt step')
+    assert(draft?.name === 'Regaderas', 'the answered name survived')
+    second.setWizard('ses-1', undefined)
+    assert(second.wizardOf('ses-1') === undefined, 'clearing drops the draft')
+    const third = new BridgeState(join(dir, 'state.json'))
+    assert(third.wizardOf('ses-1') === undefined, 'the cleared draft stays cleared on disk')
+    rmSync(dir, { recursive: true, force: true })
+  }),
+
   define('archive flags flip and clear', () => {
     const { state } = freshState()
     state.setArchived('ses-1', true)

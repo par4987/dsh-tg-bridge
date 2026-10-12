@@ -58,7 +58,7 @@ Cancela el turno en curso de la sesión.
 Los recordatorios durables de la sesión (subsistema Schedule del harness). Si el perfil no compone Schedule, lo dice honestamente.
 
 ### `/newtask`
-El asistente de recordatorios, paso a paso y persistido (un reinicio no se lo come): nombre → prompt → tipo (una vez / diario / semanal / cada N minutos) → detalle (`2026-12-01 09:00`, `09:00`, `lun 09:00`, o un número) → confirmación. `… cancelar` aborta. El recordatorio se crea con el mismo dominio durable que usa el modelo, así que también lo ve la Web y sobrevive reinicios; cuando dispara, llega como un turno más de la sesión con un aviso `⏰` en el hilo.
+El asistente de recordatorios, paso a paso y persistido (un reinicio no se lo come): nombre → prompt → tipo (una vez / diario / semanal / cada N minutos) → detalle (`2026-12-01 09:00`, `09:00`, `lun 09:00`, o un número) → confirmación. `… cancelar` aborta. El draft vive en el `state.json` del bridge, así que retomás el asistente donde quedó después de un reinicio. El recordatorio se crea con el mismo dominio durable que usa el modelo, así que también lo ve la Web y sobrevive reinicios; cuando dispara, llega como un turno más de la sesión con un aviso `⏰` en el hilo.
 
 ### `/locale es|en`
 Cambia el idioma del bot y lo persiste.
@@ -72,8 +72,17 @@ Las sesiones con un turno en curso en este proceso.
 ### `/export`
 El log durable de la sesión como documento `.jsonl` (los eventos crudos, exportados por `sessionQuery.readSession`).
 
-### `/rename <título>`
-Fija el título vía el evento oficial `session/title` con origen `user` — lo ve la Web también, y la generación automática de títulos deja de re-programarse. El hilo de Telegram se renombra igual.
+### `/rename [título]`
+Con título, fija el título vía el evento oficial `session/title` con origen `user` — lo ve la Web también, y la generación automática deja de re-programarse. El hilo de Telegram se renombra igual. **Sin argumento, regenera**: llama al `sessionTitle.refresh` del harness, que despina el título actual y deriva uno nuevo (el análogo honesto de las tres sugerencias del opencode — acá el servicio da una, la buena).
+
+### `/instructions [add <texto> | clear]`
+Las notas de la carpeta: lee, agrega o vacía `AGENTS.local.md` en el cwd de la sesión — el archivo que el harness re-inyecta como instrucción local en cada sesión de esa carpeta. Cambio semántico frente al opencode (que era un store por sesión con claves): acá es un archivo markdown compartido por todo el proyecto, y el bot lo avisa en cada `add`.
+
+### `/config [model …]`
+Sin argumentos, el resumen que importa en el teléfono: modelo default de las sesiones nuevas (con su reasoning effort) y los hechos del bridge (modo, espejo, reparto de decisiones, idioma, ventana de archivado). `/config model` manda el picker de rutas — un toque fija el default para las sesiones nuevas (`agentDefaultModel.saveSelection`); `/config model <proveedor>/<modelo>` lo hace directo. El default de una sesión que ya corre no cambia: para eso está `/models`.
+
+### `/fork [id]`
+Forkea la sesión en su último turno completado — el mismo corte que hace la Web: la hija hereda los eventos balanceados hasta ese `turn/end` (`seed` + `inheritedEventCount`), registra el linaje (`isSeeded`, `parentSession`, mismo cwd) y su hilo nace con el primer mensaje. Sin argumento, forkea la sesión del hilo; con id o prefijo, esa. Una sesión sin turnos completados se rechaza con honestidad.
 
 ### `/note <texto>`
 Nota silenciosa al transcript (`agent.inject()`): el agente la ve en su próximo turno, sin despertarse ahora.
