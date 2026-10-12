@@ -29,8 +29,9 @@ import { rebuildCandidates, scanSessionActivity, sessionsRoot, type RebuildCandi
 import { type FileSystemLike, type FsTargetLike, findEntries } from './fsbrowse.ts'
 import { importSchedule, listTasks, matchScheduleRecord, startWizard } from './wizard.ts'
 import { parseModelArg } from './parsing.ts'
+import { manualToHtml, parseManualSections, readManual } from './manual.ts'
 import { escapeHtml, shortPath } from './render.ts'
-import { setLocale, t } from './locale.ts'
+import { setLocale, locale, t } from './locale.ts'
 import { safe } from './log.ts'
 
 /** Resolution of a session lookup: its live agent, or why it is unavailable. */
@@ -79,6 +80,7 @@ export type CardPayload =
   | { kind: 'perms', buttons: CardButton[], values: string[] }
   | { kind: 'commands', buttons: CardButton[], lines: string[] }
   | { kind: 'files', buttons: CardButton[], entries: FsCardEntry[] }
+  | { kind: 'help', buttons: CardButton[], commands: string[] }
 
 /** What the command handlers need from the bridge. */
 export interface CommandDeps {
@@ -190,7 +192,23 @@ export async function handleCommand(
 
   switch (command) {
     case 'help': {
-      return t('help_body', { workspace: escapeHtml(shortPath(deps.workspaceDir(), 40)) })
+      // One tappable entry per command, the manual's own section behind each.
+      // When the shipped manual cannot be read, the static list still answers.
+      const manual = readManual(locale())
+      const sections = manual !== undefined ? parseManualSections(manual) : []
+      if (sections.length === 0) {
+        return t('help_body', { workspace: escapeHtml(shortPath(deps.workspaceDir(), 40)) })
+      }
+      const buttons = sections.map((section, index) => ({
+        text: `/${section.command}`.slice(0, 60),
+        callback: `h:${index}`,
+      }))
+      await deps.sendCard(targetSession, t('help_pick'), {
+        kind: 'help',
+        buttons,
+        commands: sections.map((section) => section.command),
+      })
+      return undefined
     }
 
     case 'new': {
@@ -1401,6 +1419,44 @@ export async function handleCardCallback(
     } catch (error) {
       await answer(t('files_fail', { detail: safe(error).slice(0, 160) }), true)
     }
+    return true
+  }
+
+  if (payload.startsWith('h:') || payload === 'hb:') {
+    if (card.kind !== 'help') return false
+    if (messageId === undefined) return true
+    const back = { text: t('help_back'), callback: 'hb:' }
+    // The back button redraws the entry list; an entry tap renders that
+    // command's own manual section, re-read at tap time.
+    if (payload === 'hb:') {
+      await answer()
+      await deps.rebindCard(messageId, t('help_pick'), { kind: 'help', buttons: card.buttons, commands: card.commands })
+      return true
+    }
+    const index = Number(payload.slice(2))
+    const command = card.commands[index]
+    if (command === undefined) {
+      await answer(t('form_inactive'))
+      return true
+    }
+    const manual = readManual(locale())
+    const section = manual !== undefined
+      ? parseManualSections(manual).find((candidate) => candidate.command === command)
+      : undefined
+    await answer()
+    if (section === undefined) {
+      await deps.rebindCard(messageId, t('help_detail_none', { cmd: escapeHtml(command) }), {
+        kind: 'help',
+        buttons: [back],
+        commands: card.commands,
+      })
+      return true
+    }
+    await deps.rebindCard(messageId, manualToHtml(`${section.title}\n\n${section.body}`), {
+      kind: 'help',
+      buttons: [back],
+      commands: card.commands,
+    })
     return true
   }
 

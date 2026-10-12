@@ -17,7 +17,7 @@ Replying to a Telegram message attaches the quote to the prompt — useful to re
 Write them in any thread (they act on that session) or at the chat root (they act on the session `/use` points to).
 
 ### `/help`
-The command list, one line each.
+One button per command; each opens that command's section from this very manual (shipped with the package), rendered for Telegram, with "⬅️" to go back to the list.
 
 ### `/new [path]`
 Creates a new session. The path is the working directory (absolute, or relative to the configured `workspace`); without an argument it uses `workspace`. The thread is created with the first message.

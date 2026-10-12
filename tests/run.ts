@@ -13,6 +13,7 @@ import { answererChecks } from './answerers.check.ts'
 import { rebuildChecks } from './rebuild.check.ts'
 import { fsbrowseChecks } from './fsbrowse.check.ts'
 import { wizardChecks } from './wizard.check.ts'
+import { manualChecks } from './manual.check.ts'
 import type { Check } from './harness.ts'
 
 const checks: Check[] = [
@@ -28,6 +29,7 @@ const checks: Check[] = [
   ...rebuildChecks,
   ...fsbrowseChecks,
   ...wizardChecks,
+  ...manualChecks,
 ]
 
 let failed = 0

@@ -15,7 +15,7 @@ Responder con reply a un mensaje de Telegram agrega la cita al prompt — útil 
 Escribilos en cualquier hilo (actúan sobre esa sesión) o en la raíz del chat (actúan sobre la sesión apuntada por `/use`).
 
 ### `/help`
-La lista de comandos con una línea por uno.
+Un botón por comando; cada uno abre la sección de ese comando en este mismo manual (la que estás leyendo, embarcada con el paquete), renderizada para Telegram, con "⬅️" para volver a la lista.
 
 ### `/new [ruta]`
 Crea una sesión nueva. La ruta es el directorio de trabajo (absoluta o relativa al `workspace` configurado); sin argumento usa el `workspace`. El hilo se crea con el primer mensaje.

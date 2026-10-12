@@ -333,6 +333,9 @@ const ES: Catalog = {
   fork_done: '🌱 Forkeada: sesión <code>{id}</code> — hereda los eventos hasta su último turno; el hilo nace con el primer mensaje.',
   rename_suggested: '✏️ Título regenerado: <b>{title}</b>',
   rename_suggest_none: 'No pude regenerar el título (el servicio no está o no quiso) — fijalo a mano con <code>/rename <título></code>.',
+  help_pick: '📖 <b>dsh-tg-bridge</b> — tocá un comando para leer su detalle:',
+  help_back: '⬅️ Volver',
+  help_detail_none: 'No encontré el detalle de <code>{cmd}</code> en el manual — volvé y probá otro.',
 
   // ── reply context ──────────────────────────────────────────────────────────
   media_poll: 'una encuesta: “{q}”',
@@ -679,6 +682,9 @@ const EN: Catalog = {
   fork_done: '🌱 Forked: session <code>{id}</code> — it inherits the events up to its last turn; the thread is born with the first message.',
   rename_suggested: '✏️ Title regenerated: <b>{title}</b>',
   rename_suggest_none: 'Could not regenerate the title (the service is absent or refused) — pin one by hand with <code>/rename <title></code>.',
+  help_pick: '📖 <b>dsh-tg-bridge</b> — tap a command to read what it does:',
+  help_back: '⬅️ Back',
+  help_detail_none: 'No manual detail for <code>{cmd}</code> — go back and try another.',
 
   // ── reply context ──────────────────────────────────────────────────────────
   media_poll: 'a poll: “{q}”',
