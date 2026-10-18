@@ -27,12 +27,21 @@ import type { BridgeState } from './state.ts'
 import type { Config } from './config.ts'
 import { rebuildCandidates, scanSessionActivity, sessionsRoot, type RebuildCandidate } from './rebuild.ts'
 import { type FileSystemLike, type FsTargetLike, findEntries } from './fsbrowse.ts'
-import { importSchedule, listTasks, matchScheduleRecord, startWizard } from './wizard.ts'
+import { cancelTask, listTasks, startWizard } from './wizard.ts'
 import { parseModelArg } from './parsing.ts'
 import { manualToHtml, parseManualSections, readManual } from './manual.ts'
 import { escapeHtml, shortPath } from './render.ts'
 import { setLocale, locale, t } from './locale.ts'
 import { safe } from './log.ts'
+
+// The bridge's own message-source kind. The harness's vocabulary is
+// merge-extensible: each producer declares its own kind and consumers fall
+// through unknowns — there is no shared catch-all.
+declare module '@deepseek-ai/dsh-llm' {
+  interface MessageSourceMap {
+    'tg-bridge': { kind: 'tg-bridge' }
+  }
+}
 
 /** Resolution of a session lookup: its live agent, or why it is unavailable. */
 export interface ResolvedAgent {
@@ -524,7 +533,7 @@ export async function handleCommand(
       if (resolved.agent === undefined) return resolved.refusal ?? t('history_none')
       resolved.agent.inject(createUserMessage({
         content: [{ type: 'text', text }],
-        source: { kind: 'plugin', plugin: 'tg-bridge' },
+        source: { kind: 'tg-bridge' },
       }))
       state.touchIdle(id)
       return t('note_added')
@@ -613,21 +622,7 @@ export async function handleCommand(
     case 'taskcancel': {
       const id = targetSession
       if (id === undefined) return t('msg_no_target')
-      const schedule = await importSchedule()
-      if (schedule === undefined) return t('tasks_unavailable')
-      const resolved = await deps.resolveAgent(id)
-      if (resolved.agent === undefined) return resolved.refusal ?? t('tasks_none')
-      await ctx.sessions.flush(resolved.agent.session)
-      const folded = schedule.foldScheduleEvents(resolved.agent.session.snapshotEvents())
-      const record = matchScheduleRecord(folded.active, args.trim())
-      if (record === undefined) return t('taskcancel_none', { query: escapeHtml(args.trim()) })
-      resolved.agent.session.append('schedule/change', {
-        version: 1,
-        operation: 'delete',
-        id: record.id,
-      })
-      await ctx.sessions.flush(resolved.agent.session)
-      return t('task_deleted')
+      return cancelTask(deps, id, args.trim())
     }
 
     case 'send': {

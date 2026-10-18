@@ -57,10 +57,10 @@ Writing to an archived session — through the chat root or `/sh` — **revives*
 Cancels the session's running turn.
 
 ### `/tasks`
-The session's durable reminders (the harness's Schedule subsystem). If the profile does not compose Schedule, it says so honestly.
+The session's durable reminders, from the Schedule subsystem's **Host storage** (`ctx.schedule.list` — no session activation) plus the old ones this bot (or the legacy tool) wrote as session-log events, deduplicated by id. If the profile does not compose Schedule, it says so honestly.
 
 ### `/newtask`
-The reminder wizard, step by step and persisted (a restart cannot eat it): name → prompt → type (once / daily / weekly / every N minutes) → detail (`2026-12-01 09:00`, `09:00`, `mon 09:00`, or a number) → confirmation. `… cancel` aborts. The draft lives in the bridge's `state.json`, so you resume the wizard where you left it after a restart. The reminder is created with the same durable domain the model uses, so the Web sees it too and it survives restarts; when it fires, it arrives as one more turn of the session with a `⏰` notice in the thread.
+The reminder wizard, step by step and persisted (a restart cannot eat it): name → prompt → type (once / daily / weekly / every N minutes) → detail (`2026-12-01 09:00`, `09:00`, `mon 09:00`, or a number) → confirmation. `… cancel` aborts. The draft lives in the bridge's `state.json`, so you resume the wizard where you left it after a restart. The reminder is created through the **Host Schedule service** — the same one the model-facing tool uses (`ctx.schedule.create`) — so the Web sees it too, it survives restarts, and it never wakes the session; when it fires, it arrives as one more turn of the session with a `⏰` notice in the thread.
 
 ### `/locale es|en`
 Switches the bot's language and persists it.
@@ -138,7 +138,7 @@ File browser for the session's folder: directories first, with buttons to naviga
 Finds files by name from the session's folder — case-insensitive, up to 4 levels, skipping `node_modules`, `.git`, and build output; shows each hit's full path.
 
 ### `/taskcancel [id|text]`
-Deletes one of the session's reminders by id, prefix, or a chunk of its prompt; with no argument, the last one. Records the `schedule/change` delete the way the official tool does.
+Deletes a reminder by id, id prefix, or a chunk of its prompt; with no argument, the last one. It deletes from the **Host storage** first (`ctx.schedule.delete`, no session activation); legacy reminders living as session-log events are deleted with the `schedule/change` delete, as before.
 
 ### `/delthread`
 Deletes the Telegram thread but keeps the mapping: the session stays alive and its thread is reborn on the next event (unlike `/archive`, which also mutes it until you write).
@@ -153,7 +153,7 @@ When the agent asks for a decision — the `ask_user_question` tool, or a permis
 - **Questions**: one card per question; a tap chooses, in multi-select you tap several and confirm; "✍️ Other" arms a free answer: the thread's next message becomes the answer (nothing else reaches the agent).
 - **Permissions**: ✅ allow once / ✖ reject. "Always" is harness policy (permission presets), not a chat button — by design, one tap on the phone never institutionalizes a permission.
 
-**Who answers first** (`decisions` in configuration): both decisions travel in a waterfall, and the profile's remote forwarder (wired to the Desktop or Web app) registers before the plugin. With `app-first` (default) the app claims and answers first — the phone only sees what the app delegates. With `phone-first` the bridge jumps ahead (`prepend`) and mirrored sessions ask the phone first; with no tap within `decisionTimeoutMs` (default 2 minutes) the card says "the wait ran out" and the request moves to the app. With no app connected, the request waits in the Gateway for someone to connect — `phone-first` is what makes the phone actually participate.
+**Who answers first** (`decisions` in configuration): both decisions travel in a waterfall, and the profile's remote forwarder (wired to the Desktop or Web app) registers before the plugin. With `app-first` (default) the app claims and answers first — the phone only sees what the app delegates. With `phone-first` the bridge jumps ahead (`prepend`) and mirrored sessions ask the phone first; with no tap within `decisionTimeoutMs` (default 2 minutes) the card says "the wait ran out" and the request moves to the app. With **`parallel`** the bridge joins the forwarded-event stream (`$events`) as **one more remote client of the Gateway** — just like the app: permissions and questions reach both surfaces at once, the first tap wins, and the losing surface gets the "answered elsewhere" notice when the other one replies. With no app connected the phone answers alone; with no bot, the app answers alone.
 
 If the question was already answered on the PC, the tap gets "no longer pending" and sends nothing.
 

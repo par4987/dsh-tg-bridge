@@ -1,6 +1,6 @@
 {
   "name": "dsh-tg-bridge",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "Bidirectional Telegram bridge for DeepSeek Harness: one forum thread per session, prompts, live rendering, questions, permissions, media and scheduled tasks — as an installable dsh bundle.",
   "type": "module",
   "license": "MIT",
@@ -44,6 +44,7 @@
     "@deepseek-ai/schemastery": "*",
     "@deepseek-ai/dsh-agent": "*",
     "@deepseek-ai/dsh-agent-default-model": "*",
+    "@deepseek-ai/dsh-api-gateway": "*",
     "@deepseek-ai/dsh-attachment": "*",
     "@deepseek-ai/dsh-brand": "*",
     "@deepseek-ai/dsh-compaction": "*",
@@ -60,6 +61,7 @@
     "@deepseek-ai/schemastery": { "optional": true },
     "@deepseek-ai/dsh-agent": { "optional": true },
     "@deepseek-ai/dsh-agent-default-model": { "optional": true },
+    "@deepseek-ai/dsh-api-gateway": { "optional": true },
     "@deepseek-ai/dsh-attachment": { "optional": true },
     "@deepseek-ai/dsh-brand": { "optional": true },
     "@deepseek-ai/dsh-compaction": { "optional": true },

@@ -26,9 +26,40 @@ export function matchScheduleRecord<T extends { id: string, prompt: string }>(
     || record.prompt.toLowerCase().includes(needle))
 }
 
+/** One reminder record as the bridge reads it: host storage or a legacy session event. */
+interface ScheduleRecordLike {
+  readonly id: string
+  readonly title?: string
+  readonly prompt: string
+  readonly scheduledAt: string
+}
+
+/**
+ * The Host schedule service: durable task storage that never activates the
+ * session to read or delete. Structural face of `ctx.schedule`; absent when
+ * the profile composes no schedule subsystem.
+ */
+interface ScheduleServiceLike {
+  create(sessionId: string, request: {
+    prompt: string
+    title: string
+    after_seconds?: number
+    at?: { date: string, time: string, time_zone: string }
+    every_seconds?: number
+    daily?: { time: string, time_zone: string }
+    weekly?: { time: string, time_zone: string, weekdays: number[] }
+  }, signal?: AbortSignal): Promise<ScheduleRecordLike>
+  list(request: { sessionId: string }): Promise<ReadonlyArray<ScheduleRecordLike>>
+  delete(request: { sessionId: string, id: string }): Promise<{ deleted: boolean }>
+}
+
+function scheduleService(ctx: CommandDeps['ctx']): ScheduleServiceLike | undefined {
+  return ctx.get('schedule') as ScheduleServiceLike | undefined
+}
+
 type ScheduleModule = typeof import('@deepseek-ai/dsh-schedule')
 
-/** The Schedule domain module, or undefined when this profile composes none. */
+/** The legacy session-log Schedule domain, or undefined when this profile composes none. */
 export async function importSchedule(): Promise<ScheduleModule | undefined> {
   try {
     return (await import('@deepseek-ai/dsh-schedule')) as ScheduleModule
@@ -38,23 +69,88 @@ export async function importSchedule(): Promise<ScheduleModule | undefined> {
   }
 }
 
-/** `/tasks`: the session's active records with their next-run moments. */
+/** One task row for `/tasks`: the stored title when present, then the next target. */
+function taskLine(record: ScheduleRecordLike): string {
+  const label = (record.title ?? '').length > 0 ? `${record.title ?? ''}: ` : ''
+  return `${t('task_entry', { prompt: escapeHtml(`${label}${record.prompt}`.slice(0, 80)) })}${t('task_next', { when: record.scheduledAt })}`
+}
+
+/**
+ * `/tasks`: the Host's stored records for the session, then the legacy
+ * session-log records this bridge (or the old model tool) appended before the
+ * Host service existed — deduplicated by id, in case the Host adopted them.
+ */
 export async function listTasks(deps: CommandDeps, sessionId: string): Promise<string> {
-  const resolved = await deps.resolveAgent(sessionId)
-  if (resolved.agent === undefined) return resolved.refusal ?? t('history_none')
-  const agent = resolved.agent
+  const host = scheduleService(deps.ctx)
+  const lines: string[] = []
+  const hostIds = new Set<string>()
+  if (host !== undefined) {
+    try {
+      for (const record of await host.list({ sessionId })) {
+        hostIds.add(record.id)
+        lines.push(taskLine(record))
+      }
+    } catch (error) {
+      return t('task_fail', { detail: escapeHtml(safe(error).slice(0, 160)) })
+    }
+  }
   const schedule = await importSchedule()
-  if (schedule === undefined) return t('tasks_unavailable')
-  await deps.ctx.sessions.flush(agent.session)
-  const folded = schedule.foldScheduleEvents(agent.session.snapshotEvents())
-  if (folded.active.length === 0) return t('tasks_none')
-  const lines = folded.active.map((record) => {
-    const view = schedule.scheduleView(record, Date.now())
-    const next = (view as { nextAt?: string }).nextAt
-    const suffix = next !== undefined && next !== null ? t('task_next', { when: next }) : ''
-    return `${t('task_entry', { prompt: escapeHtml(record.prompt.slice(0, 80)) })}${suffix}`
-  })
-  return `${t('tasks_header', { n: folded.active.length })}${lines.join('')} `
+  if (schedule !== undefined) {
+    const resolved = await deps.resolveAgent(sessionId)
+    if (resolved.agent !== undefined) {
+      await deps.ctx.sessions.flush(resolved.agent.session)
+      const folded = schedule.foldScheduleEvents(resolved.agent.session.snapshotEvents())
+      for (const record of folded.active) {
+        if (hostIds.has(record.id)) continue
+        lines.push(taskLine(record))
+      }
+    }
+  }
+  if (lines.length === 0) {
+    return host === undefined && schedule === undefined ? t('tasks_unavailable') : t('tasks_none')
+  }
+  return `${t('tasks_header', { n: lines.length })}${lines.join('')} `
+}
+
+/**
+ * `/taskcancel`: delete one reminder by id, id prefix, prompt substring, or
+ * (with no argument) the last one — host storage first, legacy session-log
+ * records behind it.
+ */
+export async function cancelTask(deps: CommandDeps, sessionId: string, query: string): Promise<string> {
+  const host = scheduleService(deps.ctx)
+  if (host !== undefined) {
+    try {
+      const records = await host.list({ sessionId })
+      const record = matchScheduleRecord(records, query)
+      if (record !== undefined) {
+        await host.delete({ sessionId, id: record.id })
+        return t('task_deleted')
+      }
+    } catch (error) {
+      return t('task_fail', { detail: escapeHtml(safe(error).slice(0, 160)) })
+    }
+  }
+  const schedule = await importSchedule()
+  if (schedule !== undefined) {
+    const resolved = await deps.resolveAgent(sessionId)
+    if (resolved.agent !== undefined) {
+      await deps.ctx.sessions.flush(resolved.agent.session)
+      const folded = schedule.foldScheduleEvents(resolved.agent.session.snapshotEvents())
+      const record = matchScheduleRecord(folded.active, query)
+      if (record !== undefined) {
+        resolved.agent.session.append('schedule/change', {
+          version: 1,
+          operation: 'delete',
+          id: record.id,
+        })
+        await deps.ctx.sessions.flush(resolved.agent.session)
+        return t('task_deleted')
+      }
+    }
+  }
+  if (host === undefined && schedule === undefined) return t('tasks_unavailable')
+  return t('taskcancel_none', { query: escapeHtml(query) })
 }
 
 /**
@@ -138,43 +234,52 @@ function wizardSummary(wizard: WizardDraft): string {
 }
 
 /**
- * Append the wizard's record the way the model-facing schedule tool does:
- * flush, fold, allocate, validate through the schedule domain, append the
- * durable `schedule/change` create, flush again.
+ * Create the wizard's record through the Host schedule service — the same
+ * durable task storage the model-facing tool writes — without waking the
+ * session's Agent.
  */
 async function createReminder(deps: CommandDeps, sessionId: string, wizard: WizardDraft): Promise<string> {
-  const resolved = await deps.resolveAgent(sessionId)
-  if (resolved.agent === undefined) return resolved.refusal ?? t('history_none')
-  const agent = resolved.agent
-  const schedule = await importSchedule()
+  const schedule = scheduleService(deps.ctx)
   if (schedule === undefined) return t('tasks_unavailable')
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
+  const detail = wizard.detail ?? ''
   try {
-    await deps.ctx.sessions.flush(agent.session)
-    const folded = schedule.foldScheduleEvents(agent.session.snapshotEvents())
-    const id = schedule.allocateScheduleId(folded)
-    const now = Date.now()
-    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
-    const detail = wizard.detail ?? ''
-    let record
+    let request: Parameters<ScheduleServiceLike['create']>[1]
     if (wizard.type === 'minutes') {
       const minutes = Math.round(Number(detail))
       if (!Number.isFinite(minutes) || minutes < 1) return t('newtask_bad')
-      record = schedule.createEveryScheduleRecord(id, `${wizard.name}: ${wizard.prompt}`, minutes * 60, now)
+      request = { prompt: wizard.prompt, title: wizard.name, every_seconds: minutes * 60 }
+    } else if (wizard.type === 'daily') {
+      if (!/^\d{1,2}:\d{2}$/.test(detail.trim())) return t('newtask_bad')
+      request = { prompt: wizard.prompt, title: wizard.name, daily: { time: detail.trim(), time_zone: timeZone } }
+    } else if (wizard.type === 'weekly') {
+      const parsed = splitWeeklyDetail(detail)
+      if (parsed === undefined) return t('newtask_bad')
+      request = {
+        prompt: wizard.prompt,
+        title: wizard.name,
+        weekly: { time: parsed.time, weekdays: [parsed.weekday], time_zone: timeZone },
+      }
     } else {
       const once = splitOnceDetail(detail)
       if (once === undefined) return t('newtask_bad')
-      record = schedule.createAtScheduleRecord(id, `${wizard.name}: ${wizard.prompt}`, { date: once.date, time: once.time, time_zone: timeZone }, now)
+      request = { prompt: wizard.prompt, title: wizard.name, at: { date: once.date, time: once.time, time_zone: timeZone } }
     }
-    agent.session.append('schedule/change', {
-      version: 1,
-      operation: 'create',
-      schedule: record,
-    })
-    await deps.ctx.sessions.flush(agent.session)
+    await schedule.create(sessionId, request)
     return t('task_created', { summary: escapeHtml(wizardSummary(wizard)) })
   } catch (error) {
     return t('task_fail', { detail: escapeHtml(safe(error)) })
   }
+}
+
+/** `lun 09:00` → the ISO weekday (Monday 1 through Sunday 7) and the time the record wants. */
+export function splitWeeklyDetail(detail: string): { weekday: number, time: string } | undefined {
+  const match = /^([a-záé]{2,9})\s+(\d{1,2}:\d{2})$/.exec(detail.trim().toLowerCase())
+  if (match === null) return undefined
+  const days = t('days_short').split(',')
+  const index = days.indexOf(match[1] ?? '')
+  if (index < 0) return undefined
+  return { weekday: index === 0 ? 7 : index, time: match[2] ?? '' }
 }
 
 /** `2026-12-01 09:00` / `01/12 09:00` / `lun 09:00` → the pair the record wants. */

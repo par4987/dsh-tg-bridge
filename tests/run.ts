@@ -14,6 +14,7 @@ import { rebuildChecks } from './rebuild.check.ts'
 import { fsbrowseChecks } from './fsbrowse.check.ts'
 import { wizardChecks } from './wizard.check.ts'
 import { manualChecks } from './manual.check.ts'
+import { remoteClientChecks } from './remoteclient.check.ts'
 import type { Check } from './harness.ts'
 
 const checks: Check[] = [
@@ -30,6 +31,7 @@ const checks: Check[] = [
   ...fsbrowseChecks,
   ...wizardChecks,
   ...manualChecks,
+  ...remoteClientChecks,
 ]
 
 let failed = 0

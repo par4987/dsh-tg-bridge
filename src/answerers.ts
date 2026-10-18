@@ -128,7 +128,9 @@ export class AnswererHub {
         void this.finishCard(
           sessionId,
           cardMessageId,
-          `${text}\n${outcome === 'allowed-once' ? t('approval_allowed') : t('approval_rejected')}`,
+          `${text}\n${outcome === 'allowed-once'
+            ? t('approval_allowed')
+            : outcome === 'cancelled' ? t('decision_elsewhere') : t('approval_rejected')}`,
         )
         resolve(outcome)
       })
@@ -196,6 +198,11 @@ export class AnswererHub {
       const settle = (): void => end(() => {
         resolve({ answers: questions.map((question) => answers.get(question.id) ?? { id: question.id, selected: [] }) })
       })
+      /** The delivery aborted: the request settled elsewhere, or the turn died. */
+      const settleCancelled = (): void => end(() => {
+        for (const id of cardIds) void this.finishCard(sessionId, id, t('decision_elsewhere'))
+        resolve({ answers: questions.map((question) => ({ id: question.id, selected: [] })) })
+      })
       /** The phone stayed silent past the timeout: hand the request to the next answerer. */
       const delegate = (): void => end(() => {
         for (const id of cardIds) void this.finishCard(sessionId, id, t('question_delegated'))
@@ -209,7 +216,7 @@ export class AnswererHub {
         if (questions.every((question) => answers.has(question.id))) settle()
       }
 
-      req.signal?.addEventListener('abort', () => settle(), { once: true })
+      req.signal?.addEventListener('abort', () => settleCancelled(), { once: true })
 
       for (const [qi, question] of questions.entries()) {
         const multiSelect = question.multiSelect === true

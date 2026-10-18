@@ -55,10 +55,10 @@ Escribirle a una sesión archivada — por la raíz del chat o por `/sh` — **l
 Cancela el turno en curso de la sesión.
 
 ### `/tasks`
-Los recordatorios durables de la sesión (subsistema Schedule del harness). Si el perfil no compone Schedule, lo dice honestamente.
+Los recordatorios durables de la sesión, del **almacenamiento Host** del subsistema Schedule (`ctx.schedule.list` — sin activar la sesión) más los viejos que este bot (o la tool antigua) escribieron como eventos del log, deduplicados por id. Si el perfil no compone Schedule, lo dice honestamente.
 
 ### `/newtask`
-El asistente de recordatorios, paso a paso y persistido (un reinicio no se lo come): nombre → prompt → tipo (una vez / diario / semanal / cada N minutos) → detalle (`2026-12-01 09:00`, `09:00`, `lun 09:00`, o un número) → confirmación. `… cancelar` aborta. El draft vive en el `state.json` del bridge, así que retomás el asistente donde quedó después de un reinicio. El recordatorio se crea con el mismo dominio durable que usa el modelo, así que también lo ve la Web y sobrevive reinicios; cuando dispara, llega como un turno más de la sesión con un aviso `⏰` en el hilo.
+El asistente de recordatorios, paso a paso y persistido (un reinicio no se lo come): nombre → prompt → tipo (una vez / diario / semanal / cada N minutos) → detalle (`2026-12-01 09:00`, `09:00`, `lun 09:00`, o un número) → confirmación. `… cancelar` aborta. El draft vive en el `state.json` del bridge, así que retomás el asistente donde quedó después de un reinicio. El recordatorio se crea con el **servicio Host de Schedule** — el mismo que usa la tool model-facing (`ctx.schedule.create`) — así que también lo ve la Web, sobrevive reinicios y no despierta la sesión; cuando dispara, llega como un turno más de la sesión con un aviso `⏰` en el hilo.
 
 ### `/locale es|en`
 Cambia el idioma del bot y lo persiste.
@@ -136,7 +136,7 @@ Explorador de archivos de la carpeta de la sesión: carpetas primero, con botone
 Busca archivos por nombre desde la carpeta de la sesión — insensible a mayúsculas, hasta 4 niveles, saltándose `node_modules`, `.git` y build output; muestra la ruta completa de cada hallazgo.
 
 ### `/taskcancel [id|texto]`
-Borra un recordatorio de la sesión por id, prefijo, o un trozo de su prompt; sin argumento, cancela el último. Registra el `schedule/change` delete como la tool oficial.
+Borra un recordatorio por id, prefijo, o un trozo de su prompt; sin argumento, el último. Borra primero del **almacenamiento Host** (`ctx.schedule.delete`, sin activar la sesión); los recordatorios viejos que viven como eventos del log se borran con el `schedule/change` delete, como siempre.
 
 ### `/delthread`
 Borra el hilo de Telegram pero deja el mapeo: la sesión sigue viva y su hilo renace con el próximo evento (distinto de `/archive`, que además la silencia hasta que le escribas).
@@ -151,7 +151,7 @@ Cuando el agente pide una decisión — la tool `ask_user_question`, o un permis
 - **Preguntas**: una tarjeta por pregunta; un toque elige, en las de multi-selección tocás varias y confirmás; "✍️ Otra" arma la respuesta libre: el próximo mensaje del hilo se convierte en la respuesta (nada más se envía al agente).
 - **Permisos**: ✅ una vez / ✖ rechazar. "Siempre" es política del harness (permission presets), no de un botón de chat — por diseño, un toque en el teléfono nunca institucionaliza un permiso.
 
-**Quién contesta primero** (`decisions` en la configuración): ambas decisiones viajan en cascada, y el reenviador remoto del perfil (conectado a la app Desktop o Web) se registra antes que el plugin. Con `app-first` (default) la app reclama y contesta primero — el teléfono solo ve lo que la app delega. Con `phone-first` el bridge salta adelante (`prepend`) y las sesiones espejadas preguntan al teléfono primero; si no hay toque en `decisionTimeoutMs` (default 2 minutos), la tarjeta avisa "se venció la espera" y el pedido pasa a la app. Sin app conectada, el pedido espera en el Gateway a que alguien se conecte — `phone-first` es lo que hace que el teléfono realmente participe.
+**Quién contesta primero** (`decisions` en la configuración): ambas decisiones viajan en cascada, y el reenviador remoto del perfil (conectado a la app Desktop o Web) se registra antes que el plugin. Con `app-first` (default) la app reclama y contesta primero — el teléfono solo ve lo que la app delega. Con `phone-first` el bridge salta adelante (`prepend`) y las sesiones espejadas preguntan al teléfono primero; si no hay toque en `decisionTimeoutMs` (default 2 minutos), la tarjeta avisa "se venció la espera" y el pedido pasa a la app. Con **`parallel`** el bridge se suma al stream de eventos reenviados (`$events`) como **un cliente remoto más del Gateway** — igual que la app: permisos y preguntas llegan a las dos superficies a la vez, gana el primer toque, y la superficie perdedora recibe el aviso "se respondió en otra parte" cuando la otra contesta. Sin app conectada, el teléfono responde solo; sin bot, la app responde sola.
 
 Si la pregunta ya fue respondida en la PC, el toque recibe "ya no está pendiente" y no manda nada.
 

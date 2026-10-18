@@ -336,6 +336,7 @@ const ES: Catalog = {
   help_pick: '📖 <b>dsh-tg-bridge</b> — tocá un comando para leer su detalle:',
   help_back: '⬅️ Volver',
   help_detail_none: 'No encontré el detalle de <code>{cmd}</code> en el manual — volvé y probá otro.',
+  decision_elsewhere: '⏭ Se respondió en otra parte — o el turno se canceló.',
 
   // ── reply context ──────────────────────────────────────────────────────────
   media_poll: 'una encuesta: “{q}”',
@@ -685,6 +686,7 @@ const EN: Catalog = {
   help_pick: '📖 <b>dsh-tg-bridge</b> — tap a command to read what it does:',
   help_back: '⬅️ Back',
   help_detail_none: 'No manual detail for <code>{cmd}</code> — go back and try another.',
+  decision_elsewhere: '⏭ Answered elsewhere — or the turn was cancelled.',
 
   // ── reply context ──────────────────────────────────────────────────────────
   media_poll: 'a poll: “{q}”',

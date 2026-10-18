@@ -32,6 +32,8 @@ import { brandString } from '@deepseek-ai/dsh-brand'
 import { createUserMessage, expandAssistantStream, type ContentBlock, type LlmCallConfig } from '@deepseek-ai/dsh-llm'
 import type { AgentHandle, AgentOptions, ModelSelection } from '@deepseek-ai/dsh-agent'
 import { SessionLogOffset, type SessionId, type Session } from '@deepseek-ai/dsh-session'
+import type { ApprovalRequestEvent } from '@deepseek-ai/dsh-user-approval/types'
+import type { AskUserQuestionRequestEvent } from '@deepseek-ai/dsh-user-questions/types'
 import { AttachmentStore, type FileAttachmentRef, type SaveImageAttachment } from '@deepseek-ai/dsh-attachment'
 // Side-effect type import: declares ctx.sessionPersistence for the injected service.
 import type {} from '@deepseek-ai/dsh-session-persistence'
@@ -43,6 +45,7 @@ import { Config, requireChatId, resolveToken } from './config.ts'
 import { BridgeState } from './state.ts'
 import { TurnRenderer } from './stream.ts'
 import { AnswererHub } from './answerers.ts'
+import { attachRemoteAnswerer } from './remoteclient.ts'
 import {
   handleCommand, handleCardCallback,
   type CardButton, type CardPayload, type CommandDeps, type ForkOutcome, type ResolvedAgent,
@@ -424,7 +427,9 @@ export function apply(ctx: Context, config: Config): void {
         break
       }
       case 'user/message': {
-        if (event.data.source.kind === 'plugin' && event.data.source.plugin === 'schedule') {
+        // The schedule runtime's producer kind arrives merged in the live
+        // process; this consumer falls through kinds it does not know.
+        if ((event.data.source as { kind: string }).kind === 'schedule') {
           if (watched(id)) void send(id, t('reminder_receipt', { text: textOf(event.data.content).slice(0, 400) }))
           return
         }
@@ -484,8 +489,9 @@ export function apply(ctx: Context, config: Config): void {
         break
       }
       case 'tool/result': {
-        const result = event.data.message.content[0]
-        if (result === undefined) break
+        // The result is a first-class tool-role message: flat blocks and the
+        // call id carried beside them, not nested inside a result block.
+        const result = event.data.message
         const summary = firstLineOf(result.content)
         collectPaths(id, textOf(result.content))
         renderer.toolEvent(id, {
@@ -577,15 +583,39 @@ export function apply(ctx: Context, config: Config): void {
     threadOf,
     notify: (error) => log('warn', 'answerer', error),
     // A timeout belongs only to a claiming bridge: in app-first the request
-    // already reached the bridge through the UI's own delegation.
+    // already reached the bridge through the UI's own delegation, and in
+    // parallel both surfaces wait exactly as the app does.
     decisionTimeoutMs: config.decisions === 'phone-first' ? config.decisionTimeoutMs : 0,
   })
 
-  // `phone-first` jumps ahead of the api-remotes forwarder, so mirrored
-  // sessions ask the phone before the connected Desktop/Web UI.
-  const decisionOptions = config.decisions === 'phone-first' ? ({ prepend: true } as const) : undefined
-  ctx.on('approval/request', (request, next) => answerers.approval(request, next), decisionOptions)
-  ctx.on('user-questions/request', (request, next) => answerers.questions(request, next), decisionOptions)
+  if (config.decisions === 'parallel') {
+    // The bridge joins the forwarded-event stream as one more remote client:
+    // the app's panel and the phone's card render together, the first answer
+    // wins, and neither holds the in-process waterfall alone.
+    attachRemoteAnswerer(ctx, {
+      threadOf,
+      onWaterfall: async (event, agentId, request, signal) => {
+        const req = {
+          ...request,
+          agent: { id: agentId },
+          signal,
+        }
+        // The frames come from the profile's own in-process Gateway stream,
+        // so the request fields are the harness's typed values, not wire input.
+        if (event === 'approval/request') {
+          return answerers.approval(req as unknown as ApprovalRequestEvent, async () => 'unavailable')
+        }
+        return answerers.questions(req as unknown as AskUserQuestionRequestEvent, async () => ({ answers: [] }))
+      },
+      notify: (message, error) => log('warn', message, error),
+    })
+  } else {
+    // `phone-first` jumps ahead of the api-remotes forwarder, so mirrored
+    // sessions ask the phone before the connected Desktop/Web UI.
+    const decisionOptions = config.decisions === 'phone-first' ? ({ prepend: true } as const) : undefined
+    ctx.on('approval/request', (request, next) => answerers.approval(request, next), decisionOptions)
+    ctx.on('user-questions/request', (request, next) => answerers.questions(request, next), decisionOptions)
+  }
 
   // ── prompts ────────────────────────────────────────────────────────────────
 

@@ -43,7 +43,8 @@
       "@deepseek-ai/dsh-user-approval/types": ["C:/Users/pablo/mcp-servers/deepseek-harness/packages/interaction/user-approval/lib/types/types.d.ts"],
       "@deepseek-ai/dsh-user-questions": ["C:/Users/pablo/mcp-servers/deepseek-harness/packages/interaction/user-questions/lib/types/index.d.ts"],
       "@deepseek-ai/dsh-user-questions/types": ["C:/Users/pablo/mcp-servers/deepseek-harness/packages/interaction/user-questions/lib/types/types.d.ts"],
-      "@deepseek-ai/dsh-schedule": ["C:/Users/pablo/mcp-servers/deepseek-harness/packages/schedule/schedule/lib/types/index.d.ts"]
+      "@deepseek-ai/dsh-schedule": ["C:/Users/pablo/mcp-servers/deepseek-harness/packages/schedule/schedule/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-api-gateway": ["C:/Users/pablo/mcp-servers/deepseek-harness/packages/api/gateway/lib/types/index.d.ts"]
     }
   },
   "include": ["src/**/*.ts", "tests/**/*.ts"]
