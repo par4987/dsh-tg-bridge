@@ -30,6 +30,7 @@ import { type FileSystemLike, type FsTargetLike, findEntries } from './fsbrowse.
 import { cancelTask, listTasks, startWizard } from './wizard.ts'
 import { parseModelArg } from './parsing.ts'
 import { manualToHtml, parseManualSections, readManual } from './manual.ts'
+import type { RemoteAnswererStatus } from './remoteclient.ts'
 import { escapeHtml, shortPath } from './render.ts'
 import { setLocale, locale, t } from './locale.ts'
 import { safe } from './log.ts'
@@ -129,7 +130,15 @@ export interface CommandDeps {
   /** Replace one card's message: new text, new buttons, new bound state. */
   rebindCard: (messageId: number, text: string, payload: CardPayload) => Promise<void>
   /** Bridge self-report for `/status`. */
-  bridgeStatus: () => { mode: string, leading: boolean, profile: string, mapped: number, running: number }
+  bridgeStatus: () => {
+    mode: string
+    leading: boolean
+    profile: string
+    mapped: number
+    running: number
+    /** The parallel remote client's accounting, present only in that mode. */
+    remote?: RemoteAnswererStatus
+  }
   /** Fork a session at its last completed turn; returns the child identity or why not. */
   forkSession: (sessionId: string) => Promise<ForkOutcome>
 }
@@ -951,6 +960,19 @@ export async function handleCommand(
         t('status_mapped', { mapped: report.mapped, running: report.running }),
         t('status_root', { root: root !== undefined ? root.slice(0, 18) : t('status_root_none') }),
       ]
+      if (deps.config.decisions === 'parallel' && report.remote !== undefined) {
+        const remote = report.remote
+        lines.push(t('status_remote', {
+          stage: t(`remote_${remote.stage}`),
+          handled: remote.handled,
+          answered: remote.answered,
+          delegated: remote.delegated,
+          cancelled: remote.cancelled,
+          error: remote.stage === 'reconnecting' && remote.lastError !== undefined
+            ? t('status_remote_error', { error: escapeHtml(remote.lastError) })
+            : '',
+        }))
+      }
       return lines.join('')
     }
 

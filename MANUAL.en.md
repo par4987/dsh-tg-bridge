@@ -144,7 +144,7 @@ Deletes a reminder by id, id prefix, or a chunk of its prompt; with no argument,
 Deletes the Telegram thread but keeps the mapping: the session stays alive and its thread is reborn on the next event (unlike `/archive`, which also mutes it until you write).
 
 ### `/status`
-The bot's self-report: mode, profile, poll leadership, mapped and running sessions, chat root.
+The bot's self-report: mode, profile, poll leadership, mapped and running sessions, chat root. In `parallel` mode it adds the remote client's state — connected/waiting for the gateway/reconnecting — and its counters (cards rendered, answered, delegated, cancelled): the diagnostic for a permission that never reached the phone, in one command.
 
 ## Questions and permissions
 

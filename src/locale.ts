@@ -337,6 +337,11 @@ const ES: Catalog = {
   help_back: '⬅️ Volver',
   help_detail_none: 'No encontré el detalle de <code>{cmd}</code> en el manual — volvé y probá otro.',
   decision_elsewhere: '⏭ Se respondió en otra parte — o el turno se canceló.',
+  status_remote: '\nParalelo: {stage} · {handled} tarjetas · {answered} resueltos · {delegated} delegados · {cancelled} cancelados{error}',
+  status_remote_error: ' · último error: {error}',
+  remote_absent: 'esperando gateway',
+  remote_attached: 'conectado',
+  remote_reconnecting: 'reconectando',
 
   // ── reply context ──────────────────────────────────────────────────────────
   media_poll: 'una encuesta: “{q}”',
@@ -687,6 +692,11 @@ const EN: Catalog = {
   help_back: '⬅️ Back',
   help_detail_none: 'No manual detail for <code>{cmd}</code> — go back and try another.',
   decision_elsewhere: '⏭ Answered elsewhere — or the turn was cancelled.',
+  status_remote: '\nParallel: {stage} · {handled} cards · {answered} answered · {delegated} delegated · {cancelled} cancelled{error}',
+  status_remote_error: ' · last error: {error}',
+  remote_absent: 'waiting for the gateway',
+  remote_attached: 'connected',
+  remote_reconnecting: 'reconnecting',
 
   // ── reply context ──────────────────────────────────────────────────────────
   media_poll: 'a poll: “{q}”',

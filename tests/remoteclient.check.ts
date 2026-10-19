@@ -3,7 +3,10 @@
  * mirrored sessions claimed, everything else delegated.
  */
 import { assert, define, type Check } from './harness.ts'
-import { pumpRemoteAnswers, type RemoteGatewayLike } from '../src/remoteclient.ts'
+import {
+  createRemoteAnswererStatus, pumpRemoteAnswers,
+  type RemoteGatewayLike,
+} from '../src/remoteclient.ts'
 
 /** One scripted $events stream plus every result the client sent back. */
 class FakeGateway implements RemoteGatewayLike {
@@ -26,10 +29,8 @@ class FakeGateway implements RemoteGatewayLike {
     },
   }
 
-  async invoke(request: { namespace: string, method: string, args: unknown }): Promise<unknown> {
-    const args = request.args as { args: { clientId: string, eventId: string, outcome: unknown } }
-    this.results.push(args.args)
-    return undefined
+  async callResult(result: { clientId: string, eventId: string, outcome: unknown }): Promise<void> {
+    this.results.push(result)
   }
 }
 
@@ -51,6 +52,7 @@ export const remoteClientChecks: Check[] = [
     const gateway = new FakeGateway([
       [{ type: 'ready', clientId: 'cli-1', host: { home: '/home/x' } }, waterfall('ev-1', 'ses-1', 'approval/request', { toolName: 'bash' })],
     ])
+    const status = createRemoteAnswererStatus()
     const answered: Array<{ event: string, agentId: string, signal: AbortSignal }> = []
     const lifetime = new AbortController()
     void pumpRemoteAnswers(gateway, {
@@ -60,7 +62,7 @@ export const remoteClientChecks: Check[] = [
         return 'allowed-once'
       },
       notify: () => undefined,
-    }, lifetime.signal, 10)
+    }, status, lifetime.signal, 10)
     await settle()
     lifetime.abort()
     assert(answered.length === 1, `the mirrored session was claimed (got ${answered.length})`)
@@ -70,24 +72,27 @@ export const remoteClientChecks: Check[] = [
     assert(result?.clientId === 'cli-1' && result?.eventId === 'ev-1', 'the result carries its correlation')
     assert(result?.outcome !== undefined && (result?.outcome as { kind: string }).kind === 'result', 'the outcome is a result')
     assert((result?.outcome as { value?: unknown }).value === 'allowed-once', "the answerer's outcome travels")
+    assert(status.stage === 'attached' && status.handled === 1 && status.answered === 1, 'the status counted the delivery')
   }),
 
   define('an unmirrored session delegates without waking the answerer', async () => {
     const gateway = new FakeGateway([
       [{ type: 'ready', clientId: 'cli-2', host: { home: '/home/x' } }, waterfall('ev-2', 'ses-other', 'approval/request')],
     ])
+    const status = createRemoteAnswererStatus()
     const answered: Array<unknown> = []
     const lifetime = new AbortController()
     pumpRemoteAnswers(gateway, {
       threadOf: () => undefined,
       onWaterfall: async () => { answered.push('woke'); return 'allowed-once' },
       notify: () => undefined,
-    }, lifetime.signal, 10)
+    }, status, lifetime.signal, 10)
     await settle()
     lifetime.abort()
     assert(answered.length === 0, 'the answerer never woke for a foreign session')
     assert(gateway.results.length === 1, 'the client answered once')
     assert((gateway.results[0]?.outcome as { kind: string }).kind === 'next', 'the answer delegated to the other surfaces')
+    assert(status.delegated === 1, 'the status counted the delegation')
   }),
 
   define('a cancel frame aborts the pending delivery', async () => {
@@ -98,6 +103,7 @@ export const remoteClientChecks: Check[] = [
         { type: 'cancel', eventId: 'ev-3' },
       ],
     ])
+    const status = createRemoteAnswererStatus()
     const answered: Array<{ signal: AbortSignal }> = []
     const lifetime = new AbortController()
     pumpRemoteAnswers(gateway, {
@@ -110,12 +116,13 @@ export const remoteClientChecks: Check[] = [
         })
       },
       notify: () => undefined,
-    }, lifetime.signal, 10)
+    }, status, lifetime.signal, 10)
     await settle()
     lifetime.abort()
     assert(answered.length === 1, 'the delivery started')
     assert(answered[0]?.signal.aborted === true, 'the cancel frame aborted the delivery signal')
     assert(gateway.results.length === 0, 'a cancelled delivery sends no result')
+    assert(status.cancelled === 1, 'the status counted the cancellation')
   }),
 
   define('an ended stream reconnects until the lifetime aborts', async () => {
@@ -123,13 +130,14 @@ export const remoteClientChecks: Check[] = [
       [{ type: 'ready', clientId: 'cli-4', host: { home: '/home/x' } }],
       [{ type: 'ready', clientId: 'cli-5', host: { home: '/home/x' } }, waterfall('ev-5', 'ses-1', 'approval/request')],
     ])
+    const status = createRemoteAnswererStatus()
     const answered: Array<unknown> = []
     const lifetime = new AbortController()
     void pumpRemoteAnswers(gateway, {
       threadOf: (sessionId: string) => (sessionId === 'ses-1' ? 5 : undefined),
       onWaterfall: async () => { answered.push('yes'); return 'allowed-once' },
       notify: () => undefined,
-    }, lifetime.signal, 10)
+    }, status, lifetime.signal, 10)
     await settle()
     assert(gateway.opens.length === 2, `the stream reconnected (got ${gateway.opens.length})`)
     assert(answered.length === 1, 'the second generation answered a request')

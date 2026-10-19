@@ -142,7 +142,7 @@ Borra un recordatorio por id, prefijo, o un trozo de su prompt; sin argumento, e
 Borra el hilo de Telegram pero deja el mapeo: la sesión sigue viva y su hilo renace con el próximo evento (distinto de `/archive`, que además la silencia hasta que le escribas).
 
 ### `/status`
-Auto-reporte del bot: modo, perfil, si lidera el poll, sesiones mapeadas y corriendo, raíz del chat.
+Auto-reporte del bot: modo, perfil, si lidera el poll, sesiones mapeadas y corriendo, raíz del chat. En modo `parallel` agrega el estado del cliente remoto: conectado/esperando el gateway/reconectando, y sus contadores (tarjetas renderizadas, resueltos, delegados, cancelados) — el diagnóstico de un permiso que no llegó al teléfono, en un solo comando.
 
 ## Preguntas y permisos
 

@@ -45,7 +45,7 @@ import { Config, requireChatId, resolveToken } from './config.ts'
 import { BridgeState } from './state.ts'
 import { TurnRenderer } from './stream.ts'
 import { AnswererHub } from './answerers.ts'
-import { attachRemoteAnswerer } from './remoteclient.ts'
+import { attachRemoteAnswerer, createRemoteAnswererStatus, type RemoteAnswererStatus } from './remoteclient.ts'
 import {
   handleCommand, handleCardCallback,
   type CardButton, type CardPayload, type CommandDeps, type ForkOutcome, type ResolvedAgent,
@@ -577,6 +577,9 @@ export function apply(ctx: Context, config: Config): void {
 
   // ── answerers (permissions + questions) ─────────────────────────────────────
 
+  /** The parallel client's observable accounting, read by `/status`. */
+  let parallelStatus: RemoteAnswererStatus | undefined
+
   const answerers = new AnswererHub({
     telegram,
     chatId,
@@ -592,6 +595,7 @@ export function apply(ctx: Context, config: Config): void {
     // The bridge joins the forwarded-event stream as one more remote client:
     // the app's panel and the phone's card render together, the first answer
     // wins, and neither holds the in-process waterfall alone.
+    const remoteStatus = createRemoteAnswererStatus()
     attachRemoteAnswerer(ctx, {
       threadOf,
       onWaterfall: async (event, agentId, request, signal) => {
@@ -608,7 +612,8 @@ export function apply(ctx: Context, config: Config): void {
         return answerers.questions(req as unknown as AskUserQuestionRequestEvent, async () => ({ answers: [] }))
       },
       notify: (message, error) => log('warn', message, error),
-    })
+    }, remoteStatus)
+    parallelStatus = remoteStatus
   } else {
     // `phone-first` jumps ahead of the api-remotes forwarder, so mirrored
     // sessions ask the phone before the connected Desktop/Web UI.
@@ -999,6 +1004,7 @@ export function apply(ctx: Context, config: Config): void {
       profile: myProfile,
       mapped: state.size(),
       running: [...liveStatus.values()].filter((status) => status === 'running').length,
+      ...(parallelStatus === undefined ? {} : { remote: parallelStatus }),
     }),
   }
 
