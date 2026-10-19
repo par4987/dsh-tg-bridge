@@ -168,7 +168,7 @@ export async function pumpRemoteAnswers(
     } catch (error) {
       if (signal.aborted) return
       status.stage = 'reconnecting'
-      status.lastError = safe(error).slice(0, 160)
+      status.lastError = describe(error).slice(0, 400)
       deps.notify('remote answers: stream failed', error)
     }
     if (signal.aborted) return
@@ -219,6 +219,21 @@ function sendResult(
   signal: AbortSignal,
 ): Promise<void> {
   return gateway.callResult({ clientId, eventId, outcome }, signal)
+}
+
+/**
+ * One stable line for `/status`: the error plus its first stack frames, so a
+ * reconnecting stage names the throwing call site from the phone.
+ */
+function describe(error: unknown): string {
+  if (!(error instanceof Error)) return safe(error)
+  const frames = (error.stack ?? '')
+    .split('\n')
+    .slice(1, 5)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .join(' | ')
+  return frames.length > 0 ? `${safe(error)} @ ${frames}` : safe(error)
 }
 
 /** The Connection's RPC face the result interception answers through. */
