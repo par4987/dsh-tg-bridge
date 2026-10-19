@@ -19,7 +19,7 @@ class FakeGateway implements RemoteGatewayLike {
   constructor(private readonly scripts: Array<Array<unknown>>) {}
 
   readonly wireStream = {
-    open: async (_endpoint: string, payload: unknown, _uplink: AsyncIterable<unknown>, _peer: undefined, _signal: AbortSignal) => {
+    open: async (_endpoint: string, payload: unknown, _uplink: AsyncIterable<unknown>, _signal: AbortSignal) => {
       const index = this.openCalls++
       const frames = [...(this.scripts[index] ?? [])]
       this.opens.push({ payload, frames })

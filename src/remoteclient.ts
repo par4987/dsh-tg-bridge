@@ -38,17 +38,12 @@ export type RemoteEventOutcome =
 
 /**
  * The minimal Gateway face this module drives: the in-process wire adapter
- * for the event stream, and the Connection RPC path for answers.
+ * for the event stream (speaking for the operator's Peer), and the Connection
+ * RPC path for answers.
  */
 export interface RemoteGatewayLike {
   readonly wireStream: {
-    open(
-      endpoint: string,
-      payload: unknown,
-      uplink: AsyncIterable<unknown>,
-      peer: undefined,
-      signal: AbortSignal,
-    ): Promise<AsyncIterable<unknown>>
+    open(endpoint: string, payload: unknown, uplink: AsyncIterable<unknown>, signal: AbortSignal): Promise<AsyncIterable<unknown>>
   }
   /** Forward one outcome through the Connection's /api result interception. */
   callResult(result: { clientId: string, eventId: string, outcome: RemoteEventOutcome }, signal: AbortSignal): Promise<void>
@@ -127,7 +122,6 @@ export async function pumpRemoteAnswers(
         REMOTE_EVENT_STREAM_ENDPOINT,
         REMOTE_EVENT_STREAM_PAYLOAD,
         (async function* () {})(),
-        undefined,
         signal,
       )
       for await (const raw of stream) {
@@ -236,9 +230,24 @@ function describe(error: unknown): string {
   return frames.length > 0 ? `${safe(error)} @ ${frames}` : safe(error)
 }
 
-/** The Connection's RPC face the result interception answers through. */
-interface ConnectionRpcLike {
-  rpc: {
+/** The Gateway's own wire-stream face; the peer is the caller's to bring. */
+interface GatewayWireStreamLike {
+  readonly wireStream: {
+    open(
+      endpoint: string,
+      payload: unknown,
+      uplink: AsyncIterable<unknown>,
+      peer: unknown,
+      signal: AbortSignal,
+    ): Promise<AsyncIterable<unknown>>
+  }
+}
+
+/** The Connection's operator Peer and RPC face the result interception answers through. */
+interface ConnectionLike {
+  /** The operator's PeerScope — the live peer an in-process carrier speaks for. */
+  readonly operator: unknown
+  readonly rpc: {
     call(
       path: '/api',
       endpoint: string,
@@ -265,8 +274,8 @@ export function attachRemoteAnswerer(ctx: Context, deps: RemoteAnswerDeps, statu
     const probe = (): void => {
       // Optional services read through the strict global store; the ctx
       // property proxy would demand a declared inject here.
-      const gateway = ctx.get('typertGateway') as Pick<RemoteGatewayLike, 'wireStream'> | undefined
-      const connection = ctx.get('connection') as ConnectionRpcLike | undefined
+      const gateway = ctx.get('typertGateway') as GatewayWireStreamLike | undefined
+      const connection = ctx.get('connection') as ConnectionLike | undefined
       if (gateway === undefined || connection === undefined) {
         if (!loggedAbsent) {
           deps.notify('remote answers: the typert Gateway or Connection is not up yet — retrying every 5s', undefined)
@@ -277,7 +286,12 @@ export function attachRemoteAnswerer(ctx: Context, deps: RemoteAnswerDeps, statu
         return
       }
       const face: RemoteGatewayLike = {
-        wireStream: gateway.wireStream,
+        // An in-process carrier names no peer of its own: the Gateway's own
+        // rule says it speaks for the operator's Peer while Connection lives.
+        wireStream: {
+          open: (endpoint, payload, uplink, signal) =>
+            gateway.wireStream.open(endpoint, payload, uplink, connection.operator, signal),
+        },
         callResult: async (result, signal) => {
           const response = await connection.rpc.call('/api', REMOTE_EVENT_RESULT_ENDPOINT, { args: result }, signal)
           if (!response.ok) throw new Error(response.error?.message ?? 'remote answers: the result RPC failed')
