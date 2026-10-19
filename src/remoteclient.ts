@@ -176,19 +176,35 @@ function sendResult(
 
 /**
  * Attach the remote answerer to the bridge's own fiber: the client lives as
- * long as the plugin, and its requests die with it.
- * @param ctx - bridge root context; `ctx.typertGateway` must be the profile's Gateway.
+ * long as the plugin, and its requests die with it. The Gateway may mount
+ * after the bridge does — an absent service retries on a timer instead of
+ * giving up, so a slow-starting profile still gets parallel answers.
+ * @param ctx - bridge root context; the profile's own Typert Gateway when it composes one.
  * @param deps - mirrored-session lookup, the waterfall answerer, and the logger.
  */
 export function attachRemoteAnswerer(ctx: Context, deps: RemoteAnswerDeps): void {
   ctx.effect(() => {
     const lifetime = new AbortController()
-    const gateway = ctx.typertGateway as RemoteGatewayLike | undefined
-    if (gateway === undefined) {
-      deps.notify('remote answers: the profile composes no typert Gateway', undefined)
-      return () => lifetime.abort()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let loggedAbsent = false
+    const probe = (): void => {
+      // An optional service reads through the strict global store; the
+      // ctx property proxy would demand a declared inject here.
+      const gateway = ctx.get('typertGateway') as RemoteGatewayLike | undefined
+      if (gateway === undefined) {
+        if (!loggedAbsent) {
+          deps.notify('remote answers: the typert Gateway is not up yet — retrying every 5s', undefined)
+          loggedAbsent = true
+        }
+        timer = setTimeout(probe, 5_000)
+        return
+      }
+      void pumpRemoteAnswers(gateway, deps, lifetime.signal)
     }
-    void pumpRemoteAnswers(gateway, deps, lifetime.signal)
-    return () => lifetime.abort()
+    probe()
+    return () => {
+      if (timer !== undefined) clearTimeout(timer)
+      lifetime.abort()
+    }
   }, 'tg-bridge.remote-answers')
 }
