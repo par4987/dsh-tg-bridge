@@ -18,8 +18,11 @@
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: declares ctx.typertGateway for the remote answerer.
 import type {} from '@deepseek-ai/dsh-api-gateway'
+import { randomUUID } from 'node:crypto'
 import { safe } from './log.ts'
 
+/** The shared Connection RPC channel the result interception rides. */
+const REMOTE_EVENT_CHANNEL = '/api'
 /** Gateway-internal endpoint of the forwarded-event stream. */
 const REMOTE_EVENT_STREAM_ENDPOINT = '$events'
 /** The result RPC's endpoint, claimed by the Connection's /api interception. */
@@ -243,18 +246,16 @@ interface GatewayWireStreamLike {
   }
 }
 
-/** The Connection's operator Peer and RPC face the result interception answers through. */
+/**
+ * The Connection's Peer factory and the shared `/api` Fetch handler: every
+ * call names the Peer it speaks for, and a `$events` client may only be
+ * answered by the Peer that opened it, so one created Peer rides both.
+ */
 interface ConnectionLike {
-  /** The operator's PeerScope — the live peer an in-process carrier speaks for. */
-  readonly operator: unknown
-  readonly rpc: {
-    call(
-      path: '/api',
-      endpoint: string,
-      payload: unknown,
-      signal?: AbortSignal,
-    ): Promise<{ ok: boolean, error?: { message: string } }>
-  }
+  /** Create one in-process Peer owned by the Context that read the service. */
+  createPeer(options: { principal: { kind: 'owner' }, interactions?: 'answer' | 'none' }): unknown
+  /** The shared-channel Fetch handler: exact routes, then the interceptor. */
+  createSharedFetchHandler(channel: string): { fetch(request: Request, peer: unknown): Promise<Response> }
 }
 
 /**
@@ -285,16 +286,44 @@ export function attachRemoteAnswerer(ctx: Context, deps: RemoteAnswerDeps, statu
         timer = setTimeout(probe, 5_000)
         return
       }
+      // Every call names the Peer it speaks for, and the Gateway never
+      // supplies a default: one owner Peer — interactions default to
+      // 'answer' — rides both the stream open and every result, because the
+      // result path refuses a Peer that is not the stream's own.
+      let peer: unknown
+      let api: ConnectionLike['createSharedFetchHandler'] extends (channel: string) => infer R ? R : never
+      try {
+        peer = connection.createPeer({ principal: { kind: 'owner' } })
+        api = connection.createSharedFetchHandler(REMOTE_EVENT_CHANNEL)
+      } catch (error) {
+        status.stage = 'reconnecting'
+        status.lastError = describe(error).slice(0, 400)
+        deps.notify('remote answers: peer creation failed', error)
+        timer = setTimeout(probe, 5_000)
+        return
+      }
       const face: RemoteGatewayLike = {
-        // An in-process carrier names no peer of its own: the Gateway's own
-        // rule says it speaks for the operator's Peer while Connection lives.
         wireStream: {
           open: (endpoint, payload, uplink, signal) =>
-            gateway.wireStream.open(endpoint, payload, uplink, connection.operator, signal),
+            gateway.wireStream.open(endpoint, payload, uplink, peer, signal),
         },
         callResult: async (result, signal) => {
-          const response = await connection.rpc.call('/api', REMOTE_EVENT_RESULT_ENDPOINT, { args: result }, signal)
-          if (!response.ok) throw new Error(response.error?.message ?? 'remote answers: the result RPC failed')
+          const request = new Request(`http://tg-bridge.local${REMOTE_EVENT_CHANNEL}/${REMOTE_EVENT_RESULT_ENDPOINT}`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              type: 'client-request',
+              rpcId: randomUUID(),
+              method: REMOTE_EVENT_RESULT_ENDPOINT,
+              payload: { args: result },
+            }),
+            signal,
+          })
+          const response = await api.fetch(request, peer)
+          const body = await response.json() as { result?: { ok?: boolean, error?: { message: string } } }
+          if (body.result?.ok !== true) {
+            throw new Error(body.result?.error?.message ?? `remote answers: the result RPC failed (HTTP ${String(response.status)})`)
+          }
         },
       }
       void pumpRemoteAnswers(face, deps, status, lifetime.signal)
