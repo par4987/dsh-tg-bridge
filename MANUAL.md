@@ -88,7 +88,21 @@ Forkea la sesión en su último turno completado — el mismo corte que hace la 
 Nota silenciosa al transcript (`agent.inject()`): el agente la ve en su próximo turno, sin despertarse ahora.
 
 ### `/sh <comando>`
-Le pide al agente que corra exactamente ese comando con su tool de shell. Distinto del opencode-tg a propósito: el harness exige que todo lo que el modelo ve esté en el log, y correr shell por afuera lo rompería — además así entra al sandbox y a los permisos del perfil.
+Corre el comando **directamente en la carpeta de la sesión**, por el servicio de shell del harness (`ctx.shell`), sin despertar al agente: la salida llega al hilo y el modelo no la ve (no hace falta: nada de eso entra al log del turno). El shell del harness en Windows es PowerShell — `&&` no funciona, usá `;`.
+
+**El guardia** clasifica cada comando antes de correrlo (parsea, no regex: separa `;` `|` `&&` respetando comillas y resuelve alias):
+
+- **Pasa derecho**: lectura pura (`Get-*`, `Test-*`, `ls`, `cat`) y la toolchain de desarrollo (`git`, `node`, `pnpm`, `cargo`, `python`...).
+- **Pide confirmación**: lo recuperable pero que puede cortar el servicio o salir de la máquina — matar procesos, instalar software, llamadas a la red, ejecución remota, tareas programadas. La tarjeta **explica qué hace cada comando** (qué va a pasar, no solo el texto) y hay que tocar "Confirmar y ejecutar".
+- **Bloqueado, sin excepción**: lo que no tiene vuelta atrás — formateo y borrado de discos, arranque y recuperación del sistema, registro, usuarios y credenciales, secretos (`.env`, `.ssh`, perfiles de navegador), defensas (antivirus, firewall, BitLocker), borrado de logs, y todos los vectores de evasión (`iex`, `Invoke-Command`, `powershell`/`cmd` anidados, `-EncodedCommand`, `Add-Type`, acceso directo a .NET/COM). Ni confirmándolo se ejecuta.
+
+El borrado está **acotado por ruta**: `Remove-Item` se permite dentro de la carpeta del proyecto y se bloquea afuera; borrar el proyecto entero (`.`) o el `.git` pide confirmación. Si el perfil no compone el servicio de shell, el comando lo dice y te sugiere escribirle al agente.
+
+### `/git`
+Qué tocó el agente en el proyecto de la sesión: corre `git status --porcelain` + `git diff --numstat` por el servicio de shell en la carpeta de la sesión y arma la lista de cambios con `+/−` por archivo. El botón **"Ver el diff"** manda el working diff como un `.patch` descargable, con una preview inline. Es el diff del proyecto, no de la sesión — varios agentes pueden compartirlo.
+
+### `/worktree [new <nombre>]`
+Los worktrees git del proyecto de la sesión. Sin argumento los lista con un botón por worktree que **abre una sesión nueva en esa carpeta** (el thread nace con el primer mensaje, como `/projects`); `/worktree new <nombre>` carvea uno nuevo (una rama nueva basada en HEAD) y avisa dónde quedó — el nombre es un nombre de rama: letras, números, punto, guión y barra, sin espacios ni símbolos.
 
 ### `/compact`
 Compresión manual del historial vía el seam oficial (`ctx.compaction.compactNow`). El resumen queda en el transcript; la Web lo ve.
@@ -174,7 +188,7 @@ Al terminar un turno, el bridge revisa las rutas de archivo que aparecieron en l
 
 ## Lo que no se portó del bot de opencode (y por qué)
 
-- **`/git`, `/worktree`, `/ci`**: el harness no tiene subsistema de VCS ni de CI. El camino honesto es pedírselo al agente — su tool de shell corre `git` con su sandbox y sus permisos, y todo queda en el log del turno.
+- **`/ci`**: el harness no tiene subsistema de CI. Queda pendiente; el bot de opencode lo implementa contra la API REST de GitHub, y el mismo camino sirve acá cuando toque.
 - **`/revert`**: el log de sesión del harness es estrictamente append-only; no existe seam de truncado ni rollback. La única sombra es la compactación, que reemplaza el resumen, no deshace un turno.
 - **`/mcp`**: los clientes MCP son entradas de composición por servidor, con ciclo de vida de plugin; no hay servicio runtime compartido que listar/conectar/desconectar.
 - **`/turns`**: no hay agregación de diff por turno; solo los diffs por escritura que adjunta la tool de archivos.

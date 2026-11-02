@@ -90,7 +90,21 @@ Forks the session at its last completed turn — the same cut the Web makes: the
 A silent note into the transcript (`agent.inject()`): the agent sees it on its next turn, without waking now.
 
 ### `/sh <command>`
-Asks the agent to run exactly that command with its shell tool. Deliberately different from opencode-tg: the harness requires everything the model sees to be in the log, and running shell outside it would break that — this way it also goes through the profile's sandbox and permissions.
+Runs the command **directly in the session's folder**, through the harness shell service (`ctx.shell`), without waking the agent: the output reaches the thread and the model never sees it (nothing of it needs to enter the turn's log). The harness shell on Windows is PowerShell — `&&` does not work, use `;`.
+
+**The guard** classifies every command before it runs (it parses, never regexes: it splits on `;` `|` `&&` respecting quotes and resolves aliases):
+
+- **Passes straight through**: read-only commands (`Get-*`, `Test-*`, `ls`, `cat`) and the dev toolchain (`git`, `node`, `pnpm`, `cargo`, `python`...).
+- **Asks first**: recoverable but able to cut the service or leave the machine — killing processes, installing software, network calls, remote execution, scheduled tasks. The card **explains what each command does** (what will happen, not just the text) and waits for "Confirm and run".
+- **Blocked, no exceptions**: what has no way back — formatting and wiping disks, boot and system recovery, the registry, users and credentials, secrets (`.env`, `.ssh`, browser profiles), defenses (antivirus, firewall, BitLocker), log clearing, and every evasion vector (`iex`, `Invoke-Command`, nested `powershell`/`cmd`, `-EncodedCommand`, `Add-Type`, direct .NET/COM access). Not even a tap runs it.
+
+Deletion is **path-scoped**: `Remove-Item` is allowed inside the project folder and forbidden outside it; deleting the whole project (`.`) or its `.git` asks first. When the profile composes no shell service, the command says so and suggests writing to the agent.
+
+### `/git`
+What the agent touched in the session's project: it runs `git status --porcelain` + `git diff --numstat` through the shell service in the session's folder and renders the change list with `+/−` per file. The **"View the diff"** button sends the working diff as a downloadable `.patch`, with an inline preview. It is the project's diff, not the session's — several agents can share it.
+
+### `/worktree [new <name>]`
+The git worktrees of the session's project. Without an argument it lists them, one button per worktree that **opens a new session in that folder** (its thread is born with the first message, like `/projects`); `/worktree new <name>` carves a fresh one (a new branch based on HEAD) and says where it landed — the name is a branch name: letters, digits, dot, dash and slash, no spaces or symbols.
 
 ### `/compact`
 Manual history compaction through the official seam (`ctx.compaction.compactNow`). The summary lands in the transcript; the Web sees it.
@@ -176,7 +190,7 @@ When a turn ends, the bridge scans the file paths that appeared in tool calls an
 
 ## What was not ported from the opencode bot (and why)
 
-- **`/git`, `/worktree`, `/ci`**: the harness has no VCS or CI subsystem. The honest path is asking the agent — its shell tool runs `git` with its sandbox and permissions, and everything lands in the turn's log.
+- **`/ci`**: the harness has no CI subsystem. Still pending; the opencode bot implements it against the GitHub REST API, and the same path works here when its turn comes.
 - **`/revert`**: the harness session log is strictly append-only; no truncation or rollback seam exists. The only shadowing is compaction, which replaces a summary rather than undoing a turn.
 - **`/mcp`**: MCP clients are per-server composition entries with plugin lifecycles; there is no shared runtime service to list, connect, or disconnect.
 - **`/turns`**: no per-turn diff aggregation exists; only the per-write diffs the filesystem tool attaches.

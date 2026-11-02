@@ -84,6 +84,7 @@ Everything goes into the profile's (or the home's) `cordis.patch.yml`, on the `t
 | `decisionTimeoutMs` | `120000` | `phone-first` only: how long a claim waits for a tap before delegating to the UI |
 | `render.*` | see `src/config.ts` | `editIntervalMs`, `showDiffs`, `diffMaxLines`, `showReasoning`, `reasoningChars` |
 | `locale` | `es` | The bot's language (`en` available; `/locale` switches at runtime) |
+| `shellTimeoutMs` | `60000` | Deadline for `/sh`, `/git` and `/worktree` runs (ms) |
 | `debugEvents` | `false` | Log every session event the renderer sees |
 
 Start in `dry` to validate without touching Telegram; switch to `live` when the log shows what you expect.

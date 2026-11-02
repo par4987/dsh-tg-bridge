@@ -91,6 +91,8 @@ export interface Config {
   stt: SttConfig
   /** Interface language for the bot's own messages. */
   locale: 'es' | 'en'
+  /** Deadline for `/sh`, `/git` and `/worktree` runs, in milliseconds. */
+  shellTimeoutMs: number
   /** Telegram Bot API base URL override. */
   baseUrl?: string
   /** Long-poll timeout in seconds. */
@@ -144,6 +146,7 @@ export const Config: Schema<Config> = Schema.object({
     language: 'es',
   }),
   locale: Schema.union(['es', 'en'] as const).default('es'),
+  shellTimeoutMs: Schema.number().min(5_000).max(300_000).default(60_000),
   baseUrl: Schema.string(),
   pollTimeout: Schema.number().min(5).max(90).default(30),
   debugEvents: Schema.boolean().default(false),

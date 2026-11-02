@@ -9,7 +9,7 @@
  * session/title renames, the compaction seam, agent/request route pins) the
  * command drives that mechanism instead of a bridge-private imitation.
  */
-import { writeFileSync } from 'node:fs'
+import { rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
@@ -29,6 +29,8 @@ import { rebuildCandidates, scanSessionActivity, sessionsRoot, type RebuildCandi
 import { type FileSystemLike, type FsTargetLike, findEntries } from './fsbrowse.ts'
 import { cancelTask, listTasks, startWizard } from './wizard.ts'
 import { parseModelArg } from './parsing.ts'
+import { dangerousCommand, explainCommand, type DangerMatch } from './dangerous.ts'
+import { parseGitStatus, parseWorktrees, runGit, runShell, validWorktreeName, type ShellLike, type ShellOutcome } from './shellrun.ts'
 import { manualToHtml, parseManualSections, readManual } from './manual.ts'
 import type { RemoteAnswererStatus } from './remoteclient.ts'
 import { escapeHtml, shortPath } from './render.ts'
@@ -91,6 +93,9 @@ export type CardPayload =
   | { kind: 'commands', buttons: CardButton[], lines: string[] }
   | { kind: 'files', buttons: CardButton[], entries: FsCardEntry[] }
   | { kind: 'help', buttons: CardButton[], commands: string[] }
+  | { kind: 'sh', buttons: CardButton[], items: Array<{ command: string, cwd: string }> }
+  | { kind: 'gitdiff', buttons: CardButton[], session: string }
+  | { kind: 'worktrees', buttons: CardButton[], paths: string[] }
 
 /** What the command handlers need from the bridge. */
 export interface CommandDeps {
@@ -141,6 +146,8 @@ export interface CommandDeps {
   }
   /** Fork a session at its last completed turn; returns the child identity or why not. */
   forkSession: (sessionId: string) => Promise<ForkOutcome>
+  /** The harness shell executor `/sh`, `/git` and `/worktree` run through; undefined when the profile composes none. */
+  shell: () => ShellLike | undefined
 }
 
 /** The session-query surface `/rebuild` and `/export` read (base mounts it). */
@@ -191,6 +198,51 @@ function dotFor(sessionId: string): string {
   let hash = 0
   for (let i = 0; i < sessionId.length; i++) hash = (hash * 31 + sessionId.charCodeAt(i)) >>> 0
   return DOTS[hash % DOTS.length] ?? '\u{26AB}'
+}
+
+/** The stderr (or stdout) tail of a failed git run, for an honest receipt. */
+function shellError(result: ShellOutcome): string {
+  return (result.stderr.length > 0 ? result.stderr : result.stdout).trim().slice(0, 200)
+}
+
+/** The confirm/blocked card's command list: each command as it will run, with its explanation. */
+function explainedCommands(danger: DangerMatch): string {
+  if (danger.commands.length === 0) return ''
+  const blocks = danger.commands.map((cmd) => {
+    const shown = cmd.resolved ?? cmd.asWritten ?? cmd.raw
+    const args = cmd.args.length > 0 ? ` ${cmd.args.slice(0, 8).join(' ')}` : ''
+    return `<code>${escapeHtml((shown + args).slice(0, 200))}</code>\n${escapeHtml(explainCommand(cmd))}`
+  })
+  return t('sh_explained_header') + blocks.join('\n\n')
+}
+
+/** One run's receipt: exit code, sandbox denial, and the output tail. */
+function formatShellOutput(result: ShellOutcome): string {
+  if (result.timedOut) return t('sh_timeout')
+  if (result.denied) return t('sh_denied')
+  const raw = result.stdout.length > 0 ? result.stdout : result.stderr
+  const tail = raw.length > 900 ? `…${raw.slice(-900)}` : raw.length > 0 ? raw : t('sh_no_output')
+  return `${t('sh_done', { exit: result.exitCode ?? '?' })}\n<pre>${escapeHtml(tail)}</pre>`
+}
+
+/**
+ * Run one command through the shell service and deliver its receipt to the
+ * session's thread (or the chat root when none is resolved).
+ */
+async function runShellCommand(
+  deps: CommandDeps,
+  command: string,
+  cwd: string,
+  session: string | undefined,
+): Promise<string | undefined> {
+  const result = await runShell(deps.shell(), command, cwd, deps.config.shellTimeoutMs)
+  if (result.kind === 'unavailable') return t('shell_unavailable')
+  const receipt = formatShellOutput(result)
+  // The harness shell on Windows is PowerShell: `&&` exits 1 there, and the
+  // warning says so before the person blames the command.
+  const note = command.includes('&&') ? `\n\n⚠️ ${t('sh_ps_note')}` : ''
+  await deps.sendText(session, `${receipt}${note}`)
+  return undefined
 }
 
 /**
@@ -558,16 +610,113 @@ export async function handleCommand(
     }
 
     case 'sh': {
-      const cmd = args.trim()
-      if (cmd.length === 0) return t('sh_usage')
+      const cmdText = args.trim()
       const id = targetSession
       if (id === undefined) return t('msg_no_target')
-      // The harness invariant — model-visible means logged — forbids running
-      // shell outside the agent: the command goes to the agent, which runs
-      // it through its sandboxed shell tool with its permission gates.
-      await deps.deliverPromptText(id, t('sh_frame', { cmd }))
-      state.touchIdle(id)
-      return t('sh_sent')
+      if (cmdText.length === 0) return t('sh_usage')
+      const shell = deps.shell()
+      if (shell === undefined) return t('shell_unavailable')
+      const cwd = (await deps.sessionCwd(id)) ?? deps.workspaceDir()
+      // The guard: what can kill the harness process or the machine never
+      // runs on first sight; forbidden tiers never run at all.
+      const danger = dangerousCommand(cmdText, cwd)
+      if (danger.level === 'forbidden') {
+        return t('sh_blocked_title')
+          + t('sh_blocked_body', { reason: escapeHtml(danger.reason) })
+          + explainedCommands(danger)
+          + `\n\n<code>${escapeHtml(cmdText.slice(0, 300))}</code>\n\n`
+          + t('sh_blocked_foot')
+      }
+      if (danger.level === 'confirm') {
+        await deps.sendCard(targetSession,
+          t('sh_confirm_title', { reason: escapeHtml(danger.reason) })
+            + t('sh_confirm_body')
+            + explainedCommands(danger)
+            + `\n\n<code>${escapeHtml(cmdText.slice(0, 400))}</code>`,
+          {
+            kind: 'sh',
+            buttons: [
+              { text: t('btn_confirm_exec'), callback: 'shok:0' },
+              { text: t('btn_cancel'), callback: 'shno:0' },
+            ],
+            items: [{ command: cmdText, cwd }],
+          })
+        return undefined
+      }
+      await deps.sendText(targetSession, t('sh_sent'))
+      return runShellCommand(deps, cmdText, cwd, targetSession)
+    }
+
+    case 'git': {
+      const id = targetSession
+      if (id === undefined) return t('msg_no_target')
+      const shell = deps.shell()
+      if (shell === undefined) return t('shell_unavailable')
+      const cwd = (await deps.sessionCwd(id)) ?? deps.workspaceDir()
+      const status = await runGit(shell, cwd, ['status', '--porcelain=v1'])
+      if (status.kind === 'unavailable') return t('shell_unavailable')
+      if (status.exitCode !== 0) {
+        return t('git_fail', { detail: escapeHtml(shellError(status)) })
+      }
+      const numstat = await runGit(shell, cwd, ['diff', '--numstat'])
+      const rows = parseGitStatus(status.stdout, numstat.kind === 'ran' ? numstat.stdout : '')
+      if (rows.length === 0) return t('vcs_clean')
+      const shown = rows.slice(0, 25)
+      const lines = [t('git_changes_header', { n: rows.length })]
+      for (const row of shown) {
+        const mark = row.status === 'added' ? '+' : row.status === 'deleted' ? '−' : '~'
+        lines.push(t('git_row', {
+          mark,
+          file: escapeHtml(row.file),
+          add: row.additions ?? '?',
+          del: row.deletions ?? '?',
+        }))
+      }
+      if (rows.length > 25) lines.push(t('and_more', { n: rows.length - 25 }))
+      await deps.sendCard(targetSession, lines.join(''), {
+        kind: 'gitdiff',
+        buttons: [{ text: t('btn_view_diff'), callback: 'gd:0' }],
+        session: id,
+      })
+      return undefined
+    }
+
+    case 'worktree': {
+      const id = targetSession
+      if (id === undefined) return t('msg_no_target')
+      const shell = deps.shell()
+      if (shell === undefined) return t('shell_unavailable')
+      const cwd = (await deps.sessionCwd(id)) ?? deps.workspaceDir()
+      const sub = (args.split(/\s+/)[0] ?? '').toLowerCase()
+      if (sub === 'new') {
+        const name = args.trim().slice(3).trim()
+        if (name.length === 0) return t('worktree_needs_name')
+        // The name joins a shell command line: anything outside a branch-name
+        // charset is refused here, not escaped — no injection reaches git.
+        if (!validWorktreeName(name)) return t('worktree_bad_name')
+        const created = await runGit(shell, cwd, ['worktree', 'add', name])
+        if (created.kind === 'unavailable') return t('shell_unavailable')
+        if (created.exitCode !== 0) {
+          return t('worktree_fail', { detail: escapeHtml(shellError(created)) })
+        }
+        return t('worktree_created', { name: escapeHtml(name) })
+      }
+      const list = await runGit(shell, cwd, ['worktree', 'list', '--porcelain'])
+      if (list.kind === 'unavailable') return t('shell_unavailable')
+      if (list.exitCode !== 0) return t('git_fail', { detail: escapeHtml(shellError(list)) })
+      const trees = parseWorktrees(list.stdout)
+      if (trees.length === 0) return t('worktrees_none')
+      const shown = trees.slice(0, 20)
+      const buttons = shown.map((dir, index) => {
+        const name = dir.split(/[\\/]/).filter(Boolean).pop() ?? dir
+        return { text: `🌿 ${name}`.slice(0, 60), callback: `w:${index}` }
+      })
+      await deps.sendCard(targetSession, t('worktree_header', { n: trees.length }), {
+        kind: 'worktrees',
+        buttons,
+        paths: shown,
+      })
+      return undefined
     }
 
     case 'compact': {
@@ -1435,6 +1584,102 @@ export async function handleCardCallback(
       await answer(t('files_sent', { name: entry.name.slice(0, 60) }))
     } catch (error) {
       await answer(t('files_fail', { detail: safe(error).slice(0, 160) }), true)
+    }
+    return true
+  }
+
+  if (payload.startsWith('shok:') || payload.startsWith('shno:')) {
+    if (card.kind !== 'sh') return false
+    const index = Number(payload.slice(5))
+    const item = Number.isInteger(index) ? card.items[index] : undefined
+    if (item === undefined) {
+      await answer(t('form_inactive'))
+      return true
+    }
+    if (payload.startsWith('shno:')) {
+      await answer()
+      if (messageId !== undefined) {
+        await deps.rebindCard(messageId, t('sh_cancelled'), { kind: 'sh', buttons: [], items: card.items })
+      }
+      return true
+    }
+    await answer()
+    if (messageId !== undefined) {
+      await deps.rebindCard(messageId, t('sh_sent'), { kind: 'sh', buttons: [], items: card.items })
+    }
+    await runShellCommand(deps, item.command, item.cwd, session)
+    return true
+  }
+
+  if (payload.startsWith('gd:')) {
+    if (card.kind !== 'gitdiff') return false
+    if (session === undefined) {
+      await answer(t('form_inactive'))
+      return true
+    }
+    const shell = deps.shell()
+    if (shell === undefined) {
+      await answer(t('shell_unavailable'), true)
+      return true
+    }
+    const cwd = (await deps.sessionCwd(session)) ?? deps.workspaceDir()
+    await answer(t('gitdiff_loading'))
+    const diff = await runGit(shell, cwd, ['diff'])
+    if (diff.kind === 'unavailable') {
+      await deps.sendText(session, t('shell_unavailable'))
+      return true
+    }
+    if (diff.exitCode !== 0) {
+      await deps.sendText(session, t('git_fail', { detail: escapeHtml(shellError(diff)) }))
+      return true
+    }
+    const patch = diff.stdout.trim()
+    if (patch.length === 0) {
+      await deps.sendText(session, t('gitdiff_clean'))
+      return true
+    }
+    // Full patch as a downloadable .patch; a short preview rides inline.
+    const tmp = join(tmpdir(), `tg-diff-${Date.now()}.patch`)
+    writeFileSync(tmp, patch, 'utf-8')
+    try {
+      const preview = patch.length > 1500
+        ? `${patch.slice(0, 1500)}\n${t('gitdiff_preview_cut')}`
+        : patch
+      const thread = state.threadOf(session)
+      await deps.telegram.sendMessage(deps.chatId, `<pre>${escapeHtml(preview)}</pre>`, {
+        parseMode: 'HTML',
+        ...(thread === undefined ? {} : { messageThreadId: thread }),
+      })
+      await deps.telegram.sendDocument(deps.chatId, tmp, {
+        ...(thread === undefined ? {} : { messageThreadId: thread }),
+      })
+    } finally {
+      rmSync(tmp, { force: true })
+    }
+    return true
+  }
+
+  if (payload.startsWith('w:')) {
+    if (card.kind !== 'worktrees') return false
+    const path = pick('w:', card.paths)
+    if (path === undefined) {
+      await answer(t('form_inactive'))
+      return true
+    }
+    await answer(t('worktree_opening'))
+    try {
+      const sessionId = await deps.createSession(path)
+      void deps.ensureThread(sessionId)
+      if (messageId !== undefined) {
+        await deps.rebindCard(messageId, t('projects_created', {
+          id: sessionId,
+          title: escapeHtml(basename(path)),
+        }), card)
+      }
+    } catch (error) {
+      if (messageId !== undefined) {
+        await deps.rebindCard(messageId, t('worktree_open_fail', { detail: escapeHtml(safe(error).slice(0, 160)) }), card)
+      }
     }
     return true
   }

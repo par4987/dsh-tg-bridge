@@ -82,6 +82,7 @@ Todo va en el `cordis.patch.yml` del perfil (o del home), sobre el id `tg-bridge
 | `decisionTimeoutMs` | `120000` | Solo en `phone-first`: cuánto espera un toque antes de delegar a la UI |
 | `render.*` | ver `src/config.ts` | `editIntervalMs`, `showDiffs`, `diffMaxLines`, `showReasoning`, `reasoningChars` |
 | `locale` | `es` | Idioma del bot (`en` disponible, `/locale` lo cambia en runtime) |
+| `shellTimeoutMs` | `60000` | Deadline de las corridas de `/sh`, `/git` y `/worktree` (ms) |
 | `debugEvents` | `false` | Loguea cada evento de sesión que ve el renderer |
 
 Arrancá en `dry` para validar sin tocar Telegram; pasá a `live` cuando el log muestre lo que esperás.

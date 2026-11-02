@@ -52,6 +52,7 @@ import {
 } from './commands.ts'
 import { feedWizard } from './wizard.ts'
 import { acquireLock, beatProfile, clearProfileBeat, heartbeat, isElsewhereLive, releaseLock, LOCK_INTERVAL_MS } from './ownership.ts'
+import type { ShellLike } from './shellrun.ts'
 import { downloadsDir, decodeText, isTextLike, saveBinary, DOC_MAX_CHARS } from './ingest.ts'
 import { sttAvailable, transcribeFile } from './stt.ts'
 import { describeReplyTarget, extractFilePaths, isForumEcho, selectImages, withReplyContext, type ReplyLabels, type ReplyTarget } from './media-out.ts'
@@ -489,14 +490,15 @@ export function apply(ctx: Context, config: Config): void {
         break
       }
       case 'tool/result': {
-        // The result is a first-class tool-role message: flat blocks and the
-        // call id carried beside them, not nested inside a result block.
-        const result = event.data.message
-        const summary = firstLineOf(result.content)
-        collectPaths(id, textOf(result.content))
+        // The tool result rides as one tool-result block whose own content
+        // carries the answer blocks, with the call id beside them.
+        const block = event.data.message.content[0]
+        const content = block?.content ?? []
+        const summary = firstLineOf(content)
+        collectPaths(id, textOf(content))
         renderer.toolEvent(id, {
-          id: result.toolCallId,
-          status: result.isError === true ? 'failed' : 'completed',
+          id: block?.toolCallId ?? event.data.message.source.callId,
+          status: block?.isError === true ? 'failed' : 'completed',
           output: summary,
         })
         break
@@ -998,6 +1000,7 @@ export function apply(ctx: Context, config: Config): void {
     sendCard,
     rebindCard,
     forkSession,
+    shell: () => ctx.get('shell') as ShellLike | undefined,
     bridgeStatus: () => ({
       mode: config.mode,
       leading,
@@ -1147,6 +1150,9 @@ export function apply(ctx: Context, config: Config): void {
       { command: 'commands', description: 'Harness commands' },
       { command: 'config', description: 'Config facts; default model' },
       { command: 'instructions', description: 'AGENTS.local.md notes' },
+      { command: 'sh', description: 'Run a shell command' },
+      { command: 'git', description: 'Project changes and diff' },
+      { command: 'worktree', description: 'Git worktrees' },
       { command: 'fork', description: 'Fork at last turn' },
       { command: 'perms', description: 'Permissions' },
       { command: 'skills', description: 'Skills' },
