@@ -157,6 +157,22 @@ Deletes a reminder by id, id prefix, or a chunk of its prompt; with no argument,
 ### `/delthread`
 Deletes the Telegram thread but keeps the mapping: the session stays alive and its thread is reborn on the next event (unlike `/archive`, which also mutes it until you write).
 
+### `/watch <id|all|off>`
+Which sessions the chat mirrors. The default is `all`: every mapped one. `/watch <id|prefix>` watches only that one (the rest go silent — their events stop reaching the phone), `/watch off` watches nothing, `/watch all` returns to the default. Without an argument it shows the selection. The choice persists in `state.json` — a restart keeps it. Archiving always wins: an archived session is never watched, in any mode.
+
+### `/macro save|run|list|del`
+Named prompts, to resend to any session from the keyboard:
+
+- `/macro save deploy deploy to production` — stores the prompt under the name `deploy`
+- `/macro run deploy` — sends it to the session of the thread (or the one `/use` points at)
+- `/macro list` — every saved macro
+- `/macro del deploy` — deletes it
+
+The name is case-sensitive and cannot hold spaces. They live in `<stateDir>/macros.json`.
+
+### `/recent`
+The latest prompts you sent from this phone (up to 200, persisted in `<stateDir>/recent.json`), each with a **↪️** button that resends it to the session that first received it — the same session, even when it is no longer the chat root. Every prompt the bridge delivers to an agent is recorded: typed ones, `/macro run` ones, and resends from here.
+
 ### `/status`
 The bot's self-report: mode, profile, poll leadership, mapped and running sessions, chat root. In `parallel` mode it adds the remote client's state — connected/waiting for the gateway/reconnecting — and its counters (cards rendered, answered, delegated, cancelled): the diagnostic for a permission that never reached the phone, in one command.
 

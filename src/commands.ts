@@ -31,6 +31,8 @@ import { cancelTask, listTasks, startWizard } from './wizard.ts'
 import { parseModelArg } from './parsing.ts'
 import { dangerousCommand, explainCommand, type DangerMatch } from './dangerous.ts'
 import { parseGitStatus, parseWorktrees, runGit, runShell, validWorktreeName, type ShellLike, type ShellOutcome } from './shellrun.ts'
+import type { MacroStore } from './macros.ts'
+import type { RecentEntry, RecentStore } from './recent.ts'
 import { manualToHtml, parseManualSections, readManual } from './manual.ts'
 import type { RemoteAnswererStatus } from './remoteclient.ts'
 import { escapeHtml, shortPath } from './render.ts'
@@ -96,6 +98,7 @@ export type CardPayload =
   | { kind: 'sh', buttons: CardButton[], items: Array<{ command: string, cwd: string }> }
   | { kind: 'gitdiff', buttons: CardButton[], session: string }
   | { kind: 'worktrees', buttons: CardButton[], paths: string[] }
+  | { kind: 'recent', buttons: CardButton[], entries: RecentEntry[] }
 
 /** What the command handlers need from the bridge. */
 export interface CommandDeps {
@@ -148,6 +151,10 @@ export interface CommandDeps {
   forkSession: (sessionId: string) => Promise<ForkOutcome>
   /** The harness shell executor `/sh`, `/git` and `/worktree` run through; undefined when the profile composes none. */
   shell: () => ShellLike | undefined
+  /** Named prompts, persisted under the state directory. */
+  macros: MacroStore
+  /** Prompts this phone sent, for `/recent` replay. */
+  recents: RecentStore
 }
 
 /** The session-query surface `/rebuild` and `/export` read (base mounts it). */
@@ -1297,6 +1304,86 @@ export async function handleCommand(
       return t('locale_done', { locale: wanted })
     }
 
+    case 'macro': {
+      const raw = args.trim()
+      const space = raw.indexOf(' ')
+      const sub = (space === -1 ? raw : raw.slice(0, space)).toLowerCase()
+      const rest = space === -1 ? '' : raw.slice(space + 1).trim()
+      if (sub === 'save') {
+        const divider = rest.indexOf(' ')
+        const name = divider === -1 ? rest : rest.slice(0, divider)
+        const text = divider === -1 ? '' : rest.slice(divider + 1).trim()
+        if (name.length === 0 || text.length === 0) return t('macro_save_usage')
+        deps.macros.save(name, text)
+        return t('macro_saved', { name: escapeHtml(name) })
+      }
+      if (sub === 'list') {
+        const names = deps.macros.names()
+        if (names.length === 0) return t('macro_none')
+        const lines = names.map((name) => `\n• <code>${escapeHtml(name)}</code>`)
+        return `${t('macro_list_header', { n: names.length })}${lines.join('')}`
+      }
+      if (sub === 'del' || sub === 'delete') {
+        if (rest.length === 0) return t('macro_del_usage')
+        return deps.macros.delete(rest)
+          ? t('macro_deleted', { name: escapeHtml(rest) })
+          : t('macro_not_found', { name: escapeHtml(rest) })
+      }
+      if (sub === 'run') {
+        if (rest.length === 0) return t('macro_run_usage')
+        const macro = deps.macros.get(rest)
+        if (macro === undefined) return t('macro_not_found', { name: escapeHtml(rest) })
+        const id = targetSession
+        if (id === undefined) return t('msg_no_target')
+        await deps.deliverPromptText(id, macro.text)
+        state.touchIdle(id)
+        return t('macro_ran', { name: escapeHtml(rest) })
+      }
+      return t('macro_usage')
+    }
+
+    case 'recent': {
+      const entries = deps.recents.list(10)
+      if (entries.length === 0) return t('recent_none')
+      const buttons = entries.map((entry, index) => ({
+        text: `↪️ ${entry.text.replace(/\s+/g, ' ')}`.slice(0, 60),
+        callback: `re:${index}`,
+      }))
+      const lines = entries.map((entry) => {
+        const label = (state.titleOf(entry.session) ?? entry.session.slice(0, 18)).slice(0, 30)
+        return t('recent_entry', { label: escapeHtml(label), text: escapeHtml(entry.text.slice(0, 90)) })
+      })
+      await deps.sendCard(targetSession, `${t('recent_header', { n: entries.length })}${lines.join('')}`, {
+        kind: 'recent',
+        buttons,
+        entries,
+      })
+      return undefined
+    }
+
+    case 'watch': {
+      const arg = args.trim()
+      if (arg.length === 0) {
+        const selection = state.watchOf()
+        return selection.mode === 'all' ? t('watch_show_all')
+          : selection.mode === 'off' ? t('watch_show_off')
+          : t('watch_show_one', { id: (selection.session ?? '?').slice(0, 24) })
+      }
+      const mode = arg.toLowerCase()
+      if (mode === 'all') {
+        state.setWatch({ mode: 'all' })
+        return t('watch_all')
+      }
+      if (mode === 'off') {
+        state.setWatch({ mode: 'off' })
+        return t('watch_off')
+      }
+      const id = state.sessionByPrefix(arg)
+      if (id === undefined) return t('use_not_found')
+      state.setWatch({ mode: 'one', session: id })
+      return t('watch_one', { id: id.slice(0, 24) })
+    }
+
     default:
       return t('unknown_command', { cmd: escapeHtml(command) })
   }
@@ -1585,6 +1672,21 @@ export async function handleCardCallback(
     } catch (error) {
       await answer(t('files_fail', { detail: safe(error).slice(0, 160) }), true)
     }
+    return true
+  }
+
+  if (payload.startsWith('re:')) {
+    if (card.kind !== 'recent') return false
+    const index = Number(payload.slice(3))
+    const entry = Number.isInteger(index) ? card.entries[index] : undefined
+    if (entry === undefined) {
+      await answer(t('form_inactive'))
+      return true
+    }
+    await answer()
+    // The re-send goes to the session that first received the prompt; the
+    // delivery records it again, exactly like /macro run.
+    await deps.deliverPromptText(entry.session, entry.text)
     return true
   }
 

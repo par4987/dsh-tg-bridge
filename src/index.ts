@@ -55,6 +55,8 @@ import { acquireLock, beatProfile, clearProfileBeat, heartbeat, isElsewhereLive,
 import type { ShellLike } from './shellrun.ts'
 import { downloadsDir, decodeText, isTextLike, saveBinary, DOC_MAX_CHARS } from './ingest.ts'
 import { sttAvailable, transcribeFile } from './stt.ts'
+import { MacroStore } from './macros.ts'
+import { RecentStore } from './recent.ts'
 import { describeReplyTarget, extractFilePaths, isForumEcho, selectImages, withReplyContext, type ReplyLabels, type ReplyTarget } from './media-out.ts'
 import { chunkHtml, escapeHtml } from './render.ts'
 import { locale, setLocale, t } from './locale.ts'
@@ -121,6 +123,8 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   const state = new BridgeState(join(stateDir, 'state.json'), (message, detail) => log('warn', message, detail))
+  const macros = new MacroStore(join(stateDir, 'macros.json'), (message, detail) => log('warn', message, detail))
+  const recents = new RecentStore(join(stateDir, 'recent.json'), (message, detail) => log('warn', message, detail))
   const savedLocale = state.savedLocale() ?? config.locale
   setLocale(savedLocale)
   config.locale = savedLocale
@@ -151,7 +155,8 @@ export function apply(ctx: Context, config: Config): void {
   const liveStatus = new Map<string, 'idle' | 'running'>()
 
   const isLive = (sessionId: string): boolean => liveStatus.has(sessionId)
-  const watched = (sessionId: string): boolean => state.has(sessionId) && !state.isArchived(sessionId)
+  // The mirror's own gate: mapped, not archived, and not excluded by `/watch`.
+  const watched = (sessionId: string): boolean => state.isWatched(sessionId)
   const threadOf = (sessionId: string): number | undefined =>
     watched(sessionId) ? state.threadOf(sessionId) : undefined
   const titleOf = (sessionId: string): string => (state.titleOf(sessionId) ?? '').trim() || t('no_title')
@@ -676,6 +681,9 @@ export function apply(ctx: Context, config: Config): void {
       } else {
         resolved.agent.followup(message)
       }
+      // The history `/recent` replays: every prompt this bridge delivered,
+      // whatever surface typed it.
+      recents.record(sessionId, textOf(content))
     } catch (error) {
       await send(sessionId, t('err_generic', { detail: safe(error).slice(0, 200) }))
     }
@@ -1001,6 +1009,8 @@ export function apply(ctx: Context, config: Config): void {
     rebindCard,
     forkSession,
     shell: () => ctx.get('shell') as ShellLike | undefined,
+    macros,
+    recents,
     bridgeStatus: () => ({
       mode: config.mode,
       leading,
@@ -1153,6 +1163,9 @@ export function apply(ctx: Context, config: Config): void {
       { command: 'sh', description: 'Run a shell command' },
       { command: 'git', description: 'Project changes and diff' },
       { command: 'worktree', description: 'Git worktrees' },
+      { command: 'macro', description: 'Named prompts' },
+      { command: 'recent', description: 'Latest prompts' },
+      { command: 'watch', description: 'Mirror selection' },
       { command: 'fork', description: 'Fork at last turn' },
       { command: 'perms', description: 'Permissions' },
       { command: 'skills', description: 'Skills' },

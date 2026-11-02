@@ -155,6 +155,22 @@ Borra un recordatorio por id, prefijo, o un trozo de su prompt; sin argumento, e
 ### `/delthread`
 Borra el hilo de Telegram pero deja el mapeo: la sesión sigue viva y su hilo renace con el próximo evento (distinto de `/archive`, que además la silencia hasta que le escribas).
 
+### `/watch <id|all|off>`
+Qué sesiones se miran en el chat. El default es `all`: todas las mapeadas. `/watch <id|prefijo>` mira solo esa (el resto queda silencioso — los eventos no llegan al teléfono), `/watch off` no mira nada, `/watch all` vuelve al default. Sin argumento, muestra la selección. La elección persiste en el `state.json` — un reinicio no la pierde. El archivado siempre gana: una sesión archivada no se mira en ningún modo.
+
+### `/macro save|run|list|del`
+Prompts con nombre, para reenviarlos a cualquier sesión con un toque del teclado:
+
+- `/macro save deploy despliega a produccion` — guarda el prompt bajo el nombre `deploy`
+- `/macro run deploy` — lo envía a la sesión del hilo (o la que apunte `/use`)
+- `/macro list` — todas las guardadas
+- `/macro del deploy` — la borra
+
+El nombre es caso-sensible y no puede tener espacios. Quedan en `<stateDir>/macros.json`.
+
+### `/recent`
+Los últimos prompts que enviaste desde este teléfono (hasta 200, persistentes en `<stateDir>/recent.json`), cada uno con un botón **↪️** que lo reenvía a la sesión que lo recibió — la misma sesión, aunque ya no sea la raíz del chat. Se registra cada prompt que llega al agente por el bridge: los tipeados a mano, los de `/macro run` y los reenvíos de acá mismo.
+
 ### `/status`
 Auto-reporte del bot: modo, perfil, si lidera el poll, sesiones mapeadas y corriendo, raíz del chat. En modo `parallel` agrega el estado del cliente remoto: conectado/esperando el gateway/reconectando, y sus contadores (tarjetas renderizadas, resueltos, delegados, cancelados) — el diagnóstico de un permiso que no llegó al teléfono, en un solo comando.
 

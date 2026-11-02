@@ -41,6 +41,18 @@ interface StoredState {
   locale?: 'es' | 'en'
   /** In-flight reminder-wizard drafts, sessionId -> draft. */
   wizardDrafts?: Record<string, WizardDraft>
+  /** Runtime mirror selection made by `/watch`; absent means everything. */
+  watch?: WatchSelection
+}
+
+/**
+ * What `/watch` chose to mirror: everything (the default), one session, or
+ * nothing. The selection rides `watched()`, so a restart keeps it.
+ */
+export interface WatchSelection {
+  mode: 'all' | 'one' | 'off'
+  /** The single session `mode: 'one'` mirrors. */
+  session?: string
 }
 
 /** Token usage carried by one committed assistant message. */
@@ -89,6 +101,13 @@ export class BridgeState {
       this.locale = parsed.locale === 'es' || parsed.locale === 'en' ? parsed.locale : undefined
       this.drafts = new Map(Object.entries(parsed.wizardDrafts ?? {})
         .filter(([, draft]) => draft !== null && typeof draft === 'object'))
+      const storedWatch = parsed.watch
+      this.watch = storedWatch !== null && typeof storedWatch === 'object'
+        ? {
+            mode: storedWatch.mode === 'one' || storedWatch.mode === 'off' ? storedWatch.mode : 'all',
+            ...(typeof storedWatch.session === 'string' ? { session: storedWatch.session } : {}),
+          }
+        : { mode: 'all' }
     } catch {
       /* first run or a corrupt file — start empty */
     }
@@ -98,6 +117,7 @@ export class BridgeState {
   private rootTarget: string | undefined
   private locale: 'es' | 'en' | undefined
   private drafts = new Map<string, WizardDraft>()
+  private watch: WatchSelection = { mode: 'all' }
 
   private persist(): void {
     try {
@@ -111,6 +131,7 @@ export class BridgeState {
         wizardDrafts,
         ...(this.rootTarget === undefined ? {} : { rootTarget: this.rootTarget }),
         ...(this.locale === undefined ? {} : { locale: this.locale }),
+        ...(this.watch.mode === 'all' ? {} : { watch: this.watch }),
       }
       writeFileSync(this.file, JSON.stringify(payload, null, 2), 'utf-8')
     } catch (error) {
@@ -325,6 +346,32 @@ export class BridgeState {
   size(): number {
     this.load()
     return this.sessions.size
+  }
+
+  /** The `/watch` selection: everything (default), one session, or nothing. */
+  watchOf(): WatchSelection {
+    this.load()
+    return this.watch
+  }
+
+  /** Set the `/watch` selection; the default ('all') clears the stored key. */
+  setWatch(selection: WatchSelection): void {
+    this.load()
+    if (selection.mode === this.watch.mode && selection.session === this.watch.session) return
+    this.watch = selection
+    this.persist()
+  }
+
+  /**
+   * Whether the session earns a thread and a mirror right now: the mapping
+   * exists, the thread is not archived, and `/watch` did not exclude it.
+   */
+  isWatched(sessionId: string): boolean {
+    this.load()
+    if (!this.sessions.has(sessionId) || this.sessions.get(sessionId)?.archived === true) return false
+    if (this.watch.mode === 'off') return false
+    if (this.watch.mode === 'one') return this.watch.session === sessionId
+    return true
   }
 
   /** Flush the state file now; returns whether one exists. */

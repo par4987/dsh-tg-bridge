@@ -17,6 +17,9 @@ import { manualChecks } from './manual.check.ts'
 import { remoteClientChecks } from './remoteclient.check.ts'
 import { dangerousChecks } from './dangerous.check.ts'
 import { shellrunChecks } from './shellrun.check.ts'
+import { macrosChecks } from './macros.check.ts'
+import { recentChecks } from './recent.check.ts'
+import { watchChecks } from './watch.check.ts'
 import type { Check } from './harness.ts'
 
 const checks: Check[] = [
@@ -36,6 +39,9 @@ const checks: Check[] = [
   ...remoteClientChecks,
   ...dangerousChecks,
   ...shellrunChecks,
+  ...macrosChecks,
+  ...recentChecks,
+  ...watchChecks,
 ]
 
 let failed = 0
