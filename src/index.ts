@@ -29,7 +29,7 @@ import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-user-approval'
 import type {} from '@deepseek-ai/dsh-user-questions'
 import { brandString } from '@deepseek-ai/dsh-brand'
-import { createUserMessage, expandAssistantStream, type ContentBlock, type LlmCallConfig } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, expandAssistantStream, type ContentBlock, type LlmCallConfig, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { AgentHandle, AgentOptions, ModelSelection } from '@deepseek-ai/dsh-agent'
 import { SessionLogOffset, type SessionId, type Session } from '@deepseek-ai/dsh-session'
 import type { ApprovalRequestEvent } from '@deepseek-ai/dsh-user-approval/types'
@@ -57,6 +57,7 @@ import { downloadsDir, decodeText, isTextLike, saveBinary, DOC_MAX_CHARS } from 
 import { sttAvailable, transcribeFile } from './stt.ts'
 import { MacroStore } from './macros.ts'
 import { RecentStore } from './recent.ts'
+import { DashboardStore, renderDashboard, type DashboardFacts } from './dashboard.ts'
 import { describeReplyTarget, extractFilePaths, isForumEcho, selectImages, withReplyContext, type ReplyLabels, type ReplyTarget } from './media-out.ts'
 import { chunkHtml, escapeHtml } from './render.ts'
 import { locale, setLocale, t } from './locale.ts'
@@ -125,6 +126,7 @@ export function apply(ctx: Context, config: Config): void {
   const state = new BridgeState(join(stateDir, 'state.json'), (message, detail) => log('warn', message, detail))
   const macros = new MacroStore(join(stateDir, 'macros.json'), (message, detail) => log('warn', message, detail))
   const recents = new RecentStore(join(stateDir, 'recent.json'), (message, detail) => log('warn', message, detail))
+  const dashboards = new DashboardStore(join(stateDir, 'dashboard.json'), (message, detail) => log('warn', message, detail))
   const savedLocale = state.savedLocale() ?? config.locale
   setLocale(savedLocale)
   config.locale = savedLocale
@@ -353,6 +355,7 @@ export function apply(ctx: Context, config: Config): void {
     liveStatus.set(agent.id, status)
     if (status === 'running') typingStart(agent.id)
     else typingStop(agent.id)
+    void refreshDashboard(agent.id)
   })
 
   // ── media delivery (agent → phone) ──────────────────────────────────────────
@@ -481,6 +484,7 @@ export function apply(ctx: Context, config: Config): void {
           })
         }
         state.touchIdle(id)
+        void refreshDashboard(id)
         break
       }
       case 'tool/call': {
@@ -522,6 +526,7 @@ export function apply(ctx: Context, config: Config): void {
           void send(id, t('turn_blocked'))
         }
         state.touchIdle(id)
+        void refreshDashboard(id)
         break
       }
       default:
@@ -719,6 +724,44 @@ export function apply(ctx: Context, config: Config): void {
     const buffer: Coalesced = { texts: [text], timer: undefined }
     buffer.timer = setTimeout(() => flushCoalesced(sessionId), windowMs)
     coalescing.set(sessionId, buffer)
+  }
+
+  // ── dashboard panels ────────────────────────────────────────────────────────
+
+  /**
+   * The facts one panel renders from. The route only exists for a session
+   * running in this process: reading the request header must never wake a
+   * session just to draw its panel.
+   */
+  async function dashboardFacts(sessionId: string): Promise<DashboardFacts> {
+    const running = liveStatus.get(sessionId) === 'running'
+    const facts: DashboardFacts = { running }
+    const title = state.titleOf(sessionId)
+    if (title !== undefined) facts.title = title
+    const usage = state.usageOf(sessionId)
+    if (usage.total !== undefined) facts.usage = usage.total
+    if (usage.last !== undefined) facts.lastUsage = usage.last
+    if (running) {
+      const header = (await resolveAgent(sessionId)).agent?.session.requestHeader()
+      if (header !== undefined) facts.route = `${header.config.provider}/${header.config.model}`
+    }
+    return facts
+  }
+
+  /** Refresh a session's pinned panel when its facts actually changed. */
+  async function refreshDashboard(sessionId: string): Promise<void> {
+    const pin = dashboards.of(sessionId)
+    if (pin === undefined) return
+    const text = renderDashboard(await dashboardFacts(sessionId))
+    if (text === pin.lastText) return
+    let edited = false
+    try {
+      edited = await telegram.editMessageText(chatId, pin.messageId, text, { parseMode: 'HTML' })
+    } catch (error) {
+      log('warn', 'dashboard edit', error)
+    }
+    if (edited) dashboards.rememberText(sessionId, text)
+    else dashboards.remove(sessionId)
   }
 
   // ── inbound media (phone → agent) ──────────────────────────────────────────
@@ -949,10 +992,23 @@ export function apply(ctx: Context, config: Config): void {
   const cardRegistry = new MessageCards<CardPayload>(20)
 
   /** The inline keyboard one card's buttons lay out. */
-  const cardKeyboard = (buttons: ReadonlyArray<CardButton>): Record<string, unknown> => ({
-    inline_keyboard: chunkButtons(buttons, 2).map((row) =>
-      row.map((button) => ({ text: button.text, callback_data: button.callback }))),
-  })
+  const cardKeyboard = (payload: CardPayload): Record<string, unknown> => {
+    if (payload.kind === 'queue') {
+      // One row per pending item (five ops each), then the footer row that
+      // replays the whole arrangement.
+      const rows: CardButton[][] = []
+      for (let i = 0; i < payload.items.length; i++) rows.push(payload.buttons.slice(i * 5, i * 5 + 5))
+      const footer = payload.items.length * 5
+      if (payload.buttons[footer] !== undefined) rows.push([payload.buttons[footer]])
+      return {
+        inline_keyboard: rows.map((row) => row.map((button) => ({ text: button.text, callback_data: button.callback }))),
+      }
+    }
+    return {
+      inline_keyboard: chunkButtons(payload.buttons, 2).map((row) =>
+        row.map((button) => ({ text: button.text, callback_data: button.callback }))),
+    }
+  }
 
   /** Send one button card into a session's thread and bind its state to the message. */
   async function sendCard(sessionId: string | undefined, text: string, payload: CardPayload): Promise<void> {
@@ -960,7 +1016,7 @@ export function apply(ctx: Context, config: Config): void {
     const messageId = await telegram.sendMessage(chatId, text, {
       parseMode: 'HTML',
       ...(thread === undefined ? {} : { messageThreadId: thread }),
-      replyMarkup: cardKeyboard(payload.buttons),
+      replyMarkup: cardKeyboard(payload),
     })
     if (messageId !== null) cardRegistry.set(messageId, payload)
   }
@@ -969,7 +1025,7 @@ export function apply(ctx: Context, config: Config): void {
   async function rebindCard(messageId: number, text: string, payload: CardPayload): Promise<void> {
     await telegram.editMessageText(chatId, messageId, text, {
       parseMode: 'HTML',
-      replyMarkup: cardKeyboard(payload.buttons),
+      replyMarkup: cardKeyboard(payload),
     }).catch(() => undefined)
     cardRegistry.set(messageId, payload)
   }
@@ -1011,6 +1067,10 @@ export function apply(ctx: Context, config: Config): void {
     shell: () => ctx.get('shell') as ShellLike | undefined,
     macros,
     recents,
+    dashboards,
+    dashboardFacts,
+    isSessionRunning: (sessionId) => liveStatus.get(sessionId) === 'running',
+    armInboxReplace: (sessionId, messageId) => { armedReplace.set(sessionId, messageId as UserMessage['id']) },
     bridgeStatus: () => ({
       mode: config.mode,
       leading,
@@ -1022,6 +1082,12 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   // ── the update loop ─────────────────────────────────────────────────────────
+
+  /**
+   * Armed by a `/queue` ✏️ tap: the next message in the session's thread
+   * replaces that pending inbox item instead of queuing a new prompt.
+   */
+  const armedReplace = new Map<string, UserMessage['id']>()
 
   const replyLabels: ReplyLabels = {
     media_poll: (params) => t('media_poll', params),
@@ -1104,6 +1170,23 @@ export function apply(ctx: Context, config: Config): void {
         return
       }
 
+      // An armed inbox edit consumes the message too.
+      const armed = armedReplace.get(target)
+      if (armed !== undefined) {
+        armedReplace.delete(target)
+        const resolved = await resolveAgent(target)
+        if (resolved.agent === undefined) {
+          await send(target, resolved.refusal ?? t('resume_none'))
+          return
+        }
+        const replaced = resolved.agent.inbox.replace(
+          armed,
+          createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } }),
+        )
+        await send(target, replaced ? t('queue_replaced') : t('queue_replace_gone'))
+        return
+      }
+
       // A plain prompt, with reply context when the user answered a message.
       const quote = isForumEcho(message)
         ? undefined
@@ -1156,6 +1239,7 @@ export function apply(ctx: Context, config: Config): void {
       { command: 'usagestats', description: 'Session token usage' },
       { command: 'context', description: 'Context occupancy' },
       { command: 'queue', description: 'Session inbox' },
+      { command: 'dashboard', description: 'Pin a live panel' },
       { command: 'clearqueue', description: 'Empty the inbox' },
       { command: 'commands', description: 'Harness commands' },
       { command: 'config', description: 'Config facts; default model' },

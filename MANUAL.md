@@ -171,6 +171,20 @@ El nombre es caso-sensible y no puede tener espacios. Quedan en `<stateDir>/macr
 ### `/recent`
 Los últimos prompts que enviaste desde este teléfono (hasta 200, persistentes en `<stateDir>/recent.json`), cada uno con un botón **↪️** que lo reenvía a la sesión que lo recibió — la misma sesión, aunque ya no sea la raíz del chat. Se registra cada prompt que llega al agente por el bridge: los tipeados a mano, los de `/macro run` y los reenvíos de acá mismo.
 
+### `/queue`
+El inbox de la sesión como tarjeta interactiva: el steering pendiente (entra en el próximo paso) y los turnos pendientes (su propio turno), cada ítem con cinco botones:
+
+- **↑ / ↓** — reordena dentro de su lista
+- **▶** — adelanta el ítem al frente de su lista
+- **✖** — lo cancela (durable: no se entrega)
+- **✏️** — arma el reemplazo: el próximo mensaje de este hilo **reemplaza** ese ítem en la cola (no agrega uno nuevo)
+- **✅ Ordenar así** — aplica el orden que armaste a las listas pendientes (un splice durable por lista)
+
+Entre el render y el toque el inbox puede cambiar (un turno arranca, algo se cancela): el toque que ya no encuentra su ítem lo dice, en vez de actuar sobre otro.
+
+### `/dashboard on|off|refresh`
+Ancla en el hilo de la sesión un panel con su estado (título, 🔴 corriendo / ⚪ en pausa, ruta cuando corre en este proceso, tokens del último turno y acumulados) y lo mantiene actualizado con cada evento — la edición solo viaja cuando el texto realmente cambia. `off` lo quita, `refresh` lo redibuja. El panel persiste en `<stateDir>/dashboard.json`: sobrevive reinicios. Solo vive en un hilo de sesión (no en la raíz).
+
 ### `/status`
 Auto-reporte del bot: modo, perfil, si lidera el poll, sesiones mapeadas y corriendo, raíz del chat. En modo `parallel` agrega el estado del cliente remoto: conectado/esperando el gateway/reconectando, y sus contadores (tarjetas renderizadas, resueltos, delegados, cancelados) — el diagnóstico de un permiso que no llegó al teléfono, en un solo comando.
 

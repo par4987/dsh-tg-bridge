@@ -33,6 +33,8 @@ import { dangerousCommand, explainCommand, type DangerMatch } from './dangerous.
 import { parseGitStatus, parseWorktrees, runGit, runShell, validWorktreeName, type ShellLike, type ShellOutcome } from './shellrun.ts'
 import type { MacroStore } from './macros.ts'
 import type { RecentEntry, RecentStore } from './recent.ts'
+import { renderDashboard, type DashboardFacts, type DashboardStore } from './dashboard.ts'
+import { renderQueue, type InboxLike, type QueueItem } from './queue.ts'
 import { manualToHtml, parseManualSections, readManual } from './manual.ts'
 import type { RemoteAnswererStatus } from './remoteclient.ts'
 import { escapeHtml, shortPath } from './render.ts'
@@ -99,6 +101,7 @@ export type CardPayload =
   | { kind: 'gitdiff', buttons: CardButton[], session: string }
   | { kind: 'worktrees', buttons: CardButton[], paths: string[] }
   | { kind: 'recent', buttons: CardButton[], entries: RecentEntry[] }
+  | { kind: 'queue', buttons: CardButton[], items: QueueItem[] }
 
 /** What the command handlers need from the bridge. */
 export interface CommandDeps {
@@ -155,6 +158,14 @@ export interface CommandDeps {
   macros: MacroStore
   /** Prompts this phone sent, for `/recent` replay. */
   recents: RecentStore
+  /** The pinned dashboard panels, one per session thread. */
+  dashboards: DashboardStore
+  /** The facts one dashboard panel renders from. */
+  dashboardFacts: (sessionId: string) => Promise<DashboardFacts>
+  /** Whether a turn is running in this process right now. */
+  isSessionRunning: (sessionId: string) => boolean
+  /** Arm the next thread message to replace a pending inbox item (`/queue` ✏️). */
+  armInboxReplace: (sessionId: string, messageId: string) => void
 }
 
 /** The session-query surface `/rebuild` and `/export` read (base mounts it). */
@@ -473,13 +484,47 @@ export async function handleCommand(
       if (id === undefined) return t('msg_no_target')
       const resolved = await deps.resolveAgent(id)
       if (resolved.agent === undefined) return resolved.refusal ?? t('queue_none')
-      const nextTurn = resolved.agent.inbox.nextTurn.length
-      const nextStep = resolved.agent.inbox.nextStep.length
-      if (nextTurn === 0 && nextStep === 0) return t('queue_none')
-      const parts: string[] = [t('queue_header')]
-      if (nextTurn > 0) parts.push(t('queue_turn', { n: nextTurn }))
-      if (nextStep > 0) parts.push(t('queue_step', { n: nextStep }))
-      return parts.join('')
+      const rendered = renderQueue(resolved.agent.inbox as InboxLike)
+      if (rendered === undefined) return t('queue_none')
+      await deps.sendCard(targetSession, rendered.text, {
+        kind: 'queue',
+        buttons: rendered.buttons,
+        items: rendered.items,
+      })
+      return undefined
+    }
+
+    case 'dashboard': {
+      const id = targetSession
+      const sub = args.trim().toLowerCase()
+      if (id === undefined) return t('msg_no_target')
+      const thread = state.threadOf(id)
+      if (thread === undefined) return t('dashboard_thread')
+      if (sub === 'off') {
+        const pin = deps.dashboards.of(id)
+        if (pin !== undefined) {
+          await deps.telegram.deleteMessage(deps.chatId, pin.messageId).catch(() => undefined)
+          deps.dashboards.remove(id)
+        }
+        return t('dashboard_off')
+      }
+      if (sub.length > 0 && sub !== 'on' && sub !== 'refresh') return t('dashboard_usage')
+      const pin = deps.dashboards.of(id)
+      if (sub === 'refresh' && pin === undefined) return t('dashboard_refresh_none')
+      const text = renderDashboard(await deps.dashboardFacts(id))
+      if (pin !== undefined) {
+        const edited = await deps.telegram.editMessageText(deps.chatId, pin.messageId, text, { parseMode: 'HTML' })
+          .catch(() => false)
+        if (edited) {
+          deps.dashboards.rememberText(id, text)
+          return t('dashboard_on')
+        }
+        // The message is gone (thread deleted by hand): drop the pin and re-pin.
+        deps.dashboards.remove(id)
+      }
+      const messageId = await deps.telegram.sendMessage(deps.chatId, text, { parseMode: 'HTML', messageThreadId: thread })
+      if (messageId !== null) deps.dashboards.set(id, messageId)
+      return t('dashboard_on')
     }
 
     case 'flush': {
@@ -1672,6 +1717,81 @@ export async function handleCardCallback(
     } catch (error) {
       await answer(t('files_fail', { detail: safe(error).slice(0, 160) }), true)
     }
+    return true
+  }
+
+  if (payload.startsWith('q:')) {
+    if (card.kind !== 'queue') return false
+    if (session === undefined) {
+      await answer(t('msg_no_target'))
+      return true
+    }
+    const resolved = await deps.resolveAgent(session)
+    if (resolved.agent === undefined) {
+      await answer(resolved.refusal ?? t('resume_none'), true)
+      return true
+    }
+    const inbox = resolved.agent.inbox as InboxLike
+    /** Redraw the card with the inbox's live state (or empty it). */
+    const redraw = async (): Promise<void> => {
+      const rendered = renderQueue(inbox)
+      if (messageId === undefined) return
+      if (rendered === undefined) {
+        await deps.rebindCard(messageId, t('queue_none'), card)
+        return
+      }
+      await deps.rebindCard(messageId, rendered.text, {
+        kind: 'queue',
+        buttons: rendered.buttons,
+        items: rendered.items,
+      })
+    }
+    const verb = payload.slice(2)
+    if (verb === 'order') {
+      // Replay the card's arrangement: one durable splice per pending list.
+      inbox.splice('next-step', 0, inbox.nextStep.length,
+        card.items.filter((item) => item.target === 'next-step').map((item) => item.message))
+      inbox.splice('next-turn', 0, inbox.nextTurn.length,
+        card.items.filter((item) => item.target === 'next-turn').map((item) => item.message))
+      await answer()
+      await redraw()
+      return true
+    }
+    const sep = verb.indexOf(':')
+    const op = sep === -1 ? '' : verb.slice(0, sep)
+    const index = sep === -1 ? NaN : Number(verb.slice(sep + 1))
+    const item = ['u', 'd', 'f', 'x', 'e'].includes(op) && Number.isInteger(index) ? card.items[index] : undefined
+    if (item === undefined) {
+      await answer(t('form_inactive'))
+      return true
+    }
+    if (op === 'e') {
+      deps.armInboxReplace(session, String(item.message.id))
+      await answer(t('queue_edit_armed'))
+      return true
+    }
+    const list = item.target === 'next-step' ? inbox.nextStep : inbox.nextTurn
+    const pos = list.findIndex((message) => message.id === item.message.id)
+    if (pos === -1) {
+      await answer(t('queue_invalid'), true)
+      await redraw()
+      return true
+    }
+    if (op === 'x') {
+      inbox.remove(item.message.id)
+      await answer()
+      await redraw()
+      return true
+    }
+    if ((op === 'u' && pos > 0) || (op === 'd' && pos < list.length - 1) || op === 'f') {
+      const [moved] = inbox.splice(item.target, pos, 1, [])
+      const target = op === 'u' ? pos - 1 : op === 'd' ? pos + 1 : 0
+      inbox.splice(item.target, target, 0, moved === undefined ? [] : [moved])
+      await answer()
+      await redraw()
+      return true
+    }
+    await answer(t('form_inactive'))
     return true
   }
 

@@ -20,6 +20,8 @@ import { shellrunChecks } from './shellrun.check.ts'
 import { macrosChecks } from './macros.check.ts'
 import { recentChecks } from './recent.check.ts'
 import { watchChecks } from './watch.check.ts'
+import { dashboardChecks } from './dashboard.check.ts'
+import { queueChecks } from './queue.check.ts'
 import type { Check } from './harness.ts'
 
 const checks: Check[] = [
@@ -42,6 +44,8 @@ const checks: Check[] = [
   ...macrosChecks,
   ...recentChecks,
   ...watchChecks,
+  ...dashboardChecks,
+  ...queueChecks,
 ]
 
 let failed = 0

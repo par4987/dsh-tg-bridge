@@ -173,6 +173,20 @@ The name is case-sensitive and cannot hold spaces. They live in `<stateDir>/macr
 ### `/recent`
 The latest prompts you sent from this phone (up to 200, persisted in `<stateDir>/recent.json`), each with a **↪️** button that resends it to the session that first received it — the same session, even when it is no longer the chat root. Every prompt the bridge delivers to an agent is recorded: typed ones, `/macro run` ones, and resends from here.
 
+### `/queue`
+The session's inbox as an interactive card: pending steering (enters the next step) and pending turns (their own turn), each item carrying five buttons:
+
+- **↑ / ↓** — reorder within its list
+- **▶** — bring the item to the front of its list
+- **✖** — cancel it (durable: never delivered)
+- **✏️** — arm the replacement: the next message in this thread **replaces** that item in the queue (it does not add a new one)
+- **✅ Order them so** — applies the arrangement you made to the pending lists (one durable splice per list)
+
+Between the render and the tap the inbox can shift (a turn starts, something gets cancelled): a tap whose item is gone says so instead of acting on another.
+
+### `/dashboard on|off|refresh`
+Pins to the session's thread a panel with its state (title, 🔴 running / ⚪ idle, the route when it runs in this process, last-turn and accumulated tokens) and keeps it current with every event — the edit only travels when the text actually changed. `off` removes it, `refresh` redraws it. The pin persists in `<stateDir>/dashboard.json`: it survives restarts. It only lives in a session's thread (never at the root).
+
 ### `/status`
 The bot's self-report: mode, profile, poll leadership, mapped and running sessions, chat root. In `parallel` mode it adds the remote client's state — connected/waiting for the gateway/reconnecting — and its counters (cards rendered, answered, delegated, cancelled): the diagnostic for a permission that never reached the phone, in one command.
 
