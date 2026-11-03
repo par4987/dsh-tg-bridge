@@ -93,6 +93,8 @@ export interface Config {
   locale: 'es' | 'en'
   /** Deadline for `/sh`, `/git` and `/worktree` runs, in milliseconds. */
   shellTimeoutMs: number
+  /** The GitHub repo `/ci` reads; defaults to this bridge's own. */
+  ci?: { repo?: string }
   /** Telegram Bot API base URL override. */
   baseUrl?: string
   /** Long-poll timeout in seconds. */
@@ -147,6 +149,9 @@ export const Config: Schema<Config> = Schema.object({
   }),
   locale: Schema.union(['es', 'en'] as const).default('es'),
   shellTimeoutMs: Schema.number().min(5_000).max(300_000).default(60_000),
+  ci: Schema.object({
+    repo: Schema.string(),
+  }),
   baseUrl: Schema.string(),
   pollTimeout: Schema.number().min(5).max(90).default(30),
   debugEvents: Schema.boolean().default(false),

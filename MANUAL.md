@@ -17,8 +17,12 @@ Escribilos en cualquier hilo (actúan sobre esa sesión) o en la raíz del chat 
 ### `/help`
 Un botón por comando; cada uno abre la sección de ese comando en este mismo manual (la que estás leyendo, embarcada con el paquete), renderizada para Telegram, con "⬅️" para volver a la lista.
 
-### `/new [ruta]`
-Crea una sesión nueva. La ruta es el directorio de trabajo (absoluta o relativa al `workspace` configurado); sin argumento usa el `workspace`. El hilo se crea con el primer mensaje.
+### `/new [ruta|título]`
+Crea una sesión nueva:
+
+- **`/new <ruta absoluta>`** — la crea en esa carpeta directamente.
+- **`/new <título>`** — abre el picker de carpetas (los workspaces más recientes y el configurado); un toque crea la sesión ahí, y **nace con su título** — el hilo se abre ya nombrado.
+- **`/new`** — pide el título en el hilo (10 min para contestarlo) y sigue con el picker. Cuando solo hay una carpeta posible (sin registry), crea en el workspace sin preguntar.
 
 ### `/ls`
 Las sesiones mapeadas: id corto, título, punto verde si está activa en este proceso, 📦 si está archivada. Ordenadas por último uso.
@@ -47,6 +51,8 @@ Busca sesiones por título o id.
 ### `/archive` / `/unarchive`
 Borra el hilo de la sesión (y limpia el mapeo de thread, conservando título/uso/archivada) y `/unarchive` lo recrea nuevo — misma semántica que tu opencode-tg en chats privados, donde cerrar tópicos no aplica.
 
+**`/unarchive` sin id abre el picker**: las sesiones archivadas, las más activas primero, hasta 8 por página con flechas; un toque despierta esa sesión y le recrea el hilo. Con un texto (título o id) el picker filtra; con un id o prefijo, despierta esa directo.
+
 Con `archiveAfterDays > 0` el borrado es **automático**: el dueño del poll barre todos los mapeos en cada tick de elección y borra los hilos de sesiones idle más de esa cantidad de días. El sweep corre solo en el proceso líder (un solo dueño de la eliminación) y respeta una graza: un mapeo más joven que la ventana no se toca, de modo que `/rebuild` pueda importar sesiones viejas sin que el próximo tick les borre el hilo nuevo.
 
 Escribirle a una sesión archivada — por la raíz del chat o por `/sh` — **la revive**: cae el flag y se recrear el hilo. El silencio dura mientras nadie le hable.
@@ -58,7 +64,7 @@ Cancela el turno en curso de la sesión.
 Los recordatorios durables de la sesión, del **almacenamiento Host** del subsistema Schedule (`ctx.schedule.list` — sin activar la sesión) más los viejos que este bot (o la tool antigua) escribieron como eventos del log, deduplicados por id. Si el perfil no compone Schedule, lo dice honestamente.
 
 ### `/newtask`
-El asistente de recordatorios, paso a paso y persistido (un reinicio no se lo come): nombre → prompt → tipo (una vez / diario / semanal / cada N minutos) → detalle (`2026-12-01 09:00`, `09:00`, `lun 09:00`, o un número) → confirmación. `… cancelar` aborta. El draft vive en el `state.json` del bridge, así que retomás el asistente donde quedó después de un reinicio. El recordatorio se crea con el **servicio Host de Schedule** — el mismo que usa la tool model-facing (`ctx.schedule.create`) — así que también lo ve la Web, sobrevive reinicios y no despierta la sesión; cuando dispara, llega como un turno más de la sesión con un aviso `⏰` en el hilo.
+El asistente de recordatorios, paso a paso y persistido (un reinicio no se lo come): nombre → prompt → tipo (una vez / diario / semanal / cada N minutos) → detalle (`2026-12-01 09:00`, `09:00`, `lun 09:00`, o un número) → confirmación. `… cancelar` aborta. El draft vive en el `state.json` del bridge, así que retomás el asistente donde quedó después de un reinicio. Los pasos de **proyecto** y **modelo** del asistente de opencode no existen acá: el Schedule del harness es por sesión — el recordatorio dispara en la sesión donde lo creaste, con el modelo que ella ya tiene. El recordatorio se crea con el **servicio Host de Schedule** — el mismo que usa la tool model-facing (`ctx.schedule.create`) — así que también lo ve la Web, sobrevive reinicios y no despierta la sesión; cuando dispara, llega como un turno más de la sesión con un aviso `⏰` en el hilo.
 
 ### `/locale es|en`
 Cambia el idioma del bot y lo persiste.
@@ -185,6 +191,12 @@ Entre el render y el toque el inbox puede cambiar (un turno arranca, algo se can
 ### `/dashboard on|off|refresh`
 Ancla en el hilo de la sesión un panel con su estado (título, 🔴 corriendo / ⚪ en pausa, ruta cuando corre en este proceso, tokens del último turno y acumulados) y lo mantiene actualizado con cada evento — la edición solo viaja cuando el texto realmente cambia. `off` lo quita, `refresh` lo redibuja. El panel persiste en `<stateDir>/dashboard.json`: sobrevive reinicios. Solo vive en un hilo de sesión (no en la raíz).
 
+### `/log`
+Los últimos 10 eventos del log durable de la sesión (vía `sessionQuery.readSession`): cada línea es su `seq` y su tipo. Una ventana de lectura — no es el transcript (para eso está `/export`).
+
+### `/ci [n|workflow]`
+Las últimas runs de GitHub Actions del repo configurado (`ci.repo`, default: el de este plugin), una línea por run: estado (🟢/🔴/🟡…), workflow, commit y edad, con el sha corto como link a la run. `/ci 12` trae 12; `/ci deploy` filtra por workflow. Anónimo para repos públicos (60/hora por IP); un `GITHUB_TOKEN` en el entorno levanta el límite y alcanza repos privados — el token nunca entra a la configuración.
+
 ### `/status`
 Auto-reporte del bot: modo, perfil, si lidera el poll, sesiones mapeadas y corriendo, raíz del chat. En modo `parallel` agrega el estado del cliente remoto: conectado/esperando el gateway/reconectando, y sus contadores (tarjetas renderizadas, resueltos, delegados, cancelados) — el diagnóstico de un permiso que no llegó al teléfono, en un solo comando.
 
@@ -218,7 +230,6 @@ Al terminar un turno, el bridge revisa las rutas de archivo que aparecieron en l
 
 ## Lo que no se portó del bot de opencode (y por qué)
 
-- **`/ci`**: el harness no tiene subsistema de CI. Queda pendiente; el bot de opencode lo implementa contra la API REST de GitHub, y el mismo camino sirve acá cuando toque.
 - **`/revert`**: el log de sesión del harness es estrictamente append-only; no existe seam de truncado ni rollback. La única sombra es la compactación, que reemplaza el resumen, no deshace un turno.
 - **`/mcp`**: los clientes MCP son entradas de composición por servidor, con ciclo de vida de plugin; no hay servicio runtime compartido que listar/conectar/desconectar.
 - **`/turns`**: no hay agregación de diff por turno; solo los diffs por escritura que adjunta la tool de archivos.

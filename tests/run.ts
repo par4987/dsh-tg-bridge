@@ -22,6 +22,8 @@ import { recentChecks } from './recent.check.ts'
 import { watchChecks } from './watch.check.ts'
 import { dashboardChecks } from './dashboard.check.ts'
 import { queueChecks } from './queue.check.ts'
+import { ciChecks } from './ci.check.ts'
+import { unarchiveChecks } from './unarchive.check.ts'
 import type { Check } from './harness.ts'
 
 const checks: Check[] = [
@@ -46,6 +48,8 @@ const checks: Check[] = [
   ...watchChecks,
   ...dashboardChecks,
   ...queueChecks,
+  ...ciChecks,
+  ...unarchiveChecks,
 ]
 
 let failed = 0

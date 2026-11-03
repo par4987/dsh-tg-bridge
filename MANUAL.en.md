@@ -19,8 +19,12 @@ Write them in any thread (they act on that session) or at the chat root (they ac
 ### `/help`
 One button per command; each opens that command's section from this very manual (shipped with the package), rendered for Telegram, with "⬅️" to go back to the list.
 
-### `/new [path]`
-Creates a new session. The path is the working directory (absolute, or relative to the configured `workspace`); without an argument it uses `workspace`. The thread is created with the first message.
+### `/new [path|title]`
+Creates a new session:
+
+- **`/new <absolute path>`** — creates it in that folder outright.
+- **`/new <title>`** — opens the folder picker (the most recent workspaces plus the configured one); one tap creates the session there, and it is **born named** — its thread opens with the name.
+- **`/new`** — asks for the title in the thread (10 min to answer), then continues with the picker. When only one folder is possible (no registry), it creates in the workspace without asking.
 
 ### `/ls`
 The mapped sessions: short id, title, a green dot when live in this process, 📦 when archived. Sorted by last use.
@@ -49,7 +53,9 @@ Finds sessions by title or id.
 ### `/archive` / `/unarchive`
 Deletes the session's thread (clearing the thread mapping, keeping title/usage/archived) and `/unarchive` recreates a fresh one — the same semantics as your opencode-tg in private chats, where closing topics does not apply.
 
-With `archiveAfterDays > 0` deletion is **automatic**: the poll owner sweeps every mapping on each election tick and deletes the threads of sessions idle longer than that many days. The sweep runs only in the leading process (one owner for the deletion) and honors a grace period — a mapping younger than the window is left alone, so `/rebuild` may import old sessions without the next tick deleting their fresh thread.
+**`/unarchive` without an id opens the picker**: the archived sessions, the most active first, up to 8 per page with arrows; one tap wakes that session and recreates its thread. With a text (title or id) the picker filters; with an id or prefix, it wakes that one directly.
+
+With `archiveAfterDays > 0` the deletion is **automatic**: the poll owner sweeps every mapping on each election tick and deletes the threads of sessions idle longer than that many days. The sweep runs only in the leading process (one owner for the deletion) and honors a grace period — a mapping younger than the window is left alone, so `/rebuild` may import old sessions without the next tick deleting their fresh thread.
 
 Writing to an archived session — through the chat root or `/sh` — **revives** it: the flag drops and the thread is recreated. Silence lasts only until someone talks to it again.
 
@@ -60,7 +66,7 @@ Cancels the session's running turn.
 The session's durable reminders, from the Schedule subsystem's **Host storage** (`ctx.schedule.list` — no session activation) plus the old ones this bot (or the legacy tool) wrote as session-log events, deduplicated by id. If the profile does not compose Schedule, it says so honestly.
 
 ### `/newtask`
-The reminder wizard, step by step and persisted (a restart cannot eat it): name → prompt → type (once / daily / weekly / every N minutes) → detail (`2026-12-01 09:00`, `09:00`, `mon 09:00`, or a number) → confirmation. `… cancel` aborts. The draft lives in the bridge's `state.json`, so you resume the wizard where you left it after a restart. The reminder is created through the **Host Schedule service** — the same one the model-facing tool uses (`ctx.schedule.create`) — so the Web sees it too, it survives restarts, and it never wakes the session; when it fires, it arrives as one more turn of the session with a `⏰` notice in the thread.
+The reminder wizard, step by step and persisted (a restart cannot eat it): name → prompt → type (once / daily / weekly / every N minutes) → detail (`2026-12-01 09:00`, `09:00`, `mon 09:00`, or a number) → confirmation. `… cancel` aborts. The draft lives in the bridge's `state.json`, so you resume the wizard where you left it after a restart. The opencode wizard's **project** and **model** steps have no counterpart here: the harness Schedule is per-session — the reminder fires in the session you created it under, with the model that session already has. The reminder is created with the **Host Schedule service** — the same one the model-facing tool uses (`ctx.schedule.create`) — so the Web sees it too, it survives restarts, and it never wakes the session; when it fires, it arrives as one more turn of the session with a `⏰` notice in the thread.
 
 ### `/locale es|en`
 Switches the bot's language and persists it.
@@ -187,6 +193,11 @@ Between the render and the tap the inbox can shift (a turn starts, something get
 ### `/dashboard on|off|refresh`
 Pins to the session's thread a panel with its state (title, 🔴 running / ⚪ idle, the route when it runs in this process, last-turn and accumulated tokens) and keeps it current with every event — the edit only travels when the text actually changed. `off` removes it, `refresh` redraws it. The pin persists in `<stateDir>/dashboard.json`: it survives restarts. It only lives in a session's thread (never at the root).
 
+### `/log`
+The last 10 events of the session's durable log (through `sessionQuery.readSession`): each line is its `seq` and its type. A reading window — it is not the transcript (`/export` carries that).
+
+### `/ci [n|workflow]`
+The latest GitHub Actions runs of the configured repo (`ci.repo`, default: this plugin's own), one line per run: state (green/red/yellow), workflow, commit and age, with the short sha linking to the run. `/ci 12` fetches 12; `/ci deploy` filters by workflow. Anonymous for public repos (60/hour per IP); a `GITHUB_TOKEN` in the environment lifts the limit and reaches private repos — the token never enters configuration.
 ### `/status`
 The bot's self-report: mode, profile, poll leadership, mapped and running sessions, chat root. In `parallel` mode it adds the remote client's state — connected/waiting for the gateway/reconnecting — and its counters (cards rendered, answered, delegated, cancelled): the diagnostic for a permission that never reached the phone, in one command.
 
@@ -220,7 +231,6 @@ When a turn ends, the bridge scans the file paths that appeared in tool calls an
 
 ## What was not ported from the opencode bot (and why)
 
-- **`/ci`**: the harness has no CI subsystem. Still pending; the opencode bot implements it against the GitHub REST API, and the same path works here when its turn comes.
 - **`/revert`**: the harness session log is strictly append-only; no truncation or rollback seam exists. The only shadowing is compaction, which replaces a summary rather than undoing a turn.
 - **`/mcp`**: MCP clients are per-server composition entries with plugin lifecycles; there is no shared runtime service to list, connect, or disconnect.
 - **`/turns`**: no per-turn diff aggregation exists; only the per-write diffs the filesystem tool attaches.

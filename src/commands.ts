@@ -35,6 +35,8 @@ import type { MacroStore } from './macros.ts'
 import type { RecentEntry, RecentStore } from './recent.ts'
 import { renderDashboard, type DashboardFacts, type DashboardStore } from './dashboard.ts'
 import { renderQueue, type InboxLike, type QueueItem } from './queue.ts'
+import { fetchRuns, formatRuns, DEFAULT_REPO } from './ci.ts'
+import { UNARCHIVE_PAGE, renderUnarchive, type ArchivedRow } from './unarchive.ts'
 import { manualToHtml, parseManualSections, readManual } from './manual.ts'
 import type { RemoteAnswererStatus } from './remoteclient.ts'
 import { escapeHtml, shortPath } from './render.ts'
@@ -102,6 +104,8 @@ export type CardPayload =
   | { kind: 'worktrees', buttons: CardButton[], paths: string[] }
   | { kind: 'recent', buttons: CardButton[], entries: RecentEntry[] }
   | { kind: 'queue', buttons: CardButton[], items: QueueItem[] }
+  | { kind: 'unarchive', buttons: CardButton[], candidates: string[], page: number, query: string }
+  | { kind: 'newsession', buttons: CardButton[], paths: string[], title: string }
 
 /** What the command handlers need from the bridge. */
 export interface CommandDeps {
@@ -166,6 +170,8 @@ export interface CommandDeps {
   isSessionRunning: (sessionId: string) => boolean
   /** Arm the next thread message to replace a pending inbox item (`/queue` ✏️). */
   armInboxReplace: (sessionId: string, messageId: string) => void
+  /** Arm `/new` without a title: the next message in the same scope names it. */
+  armTitleAsk: () => void
 }
 
 /** The session-query surface `/rebuild` and `/export` read (base mounts it). */
@@ -232,6 +238,74 @@ function explainedCommands(danger: DangerMatch): string {
     return `<code>${escapeHtml((shown + args).slice(0, 200))}</code>\n${escapeHtml(explainCommand(cmd))}`
   })
   return t('sh_explained_header') + blocks.join('\n\n')
+}
+
+/** Timestamp → "hace un momento" / "hace 3 min" / "hace 2 h" / "hace 5 d". */
+function fmtAgo(at: number): string {
+  const seconds = Math.max(0, Math.floor((Date.now() - at) / 1000))
+  if (seconds < 60) return t('ago_now')
+  if (seconds < 3600) return t('ago_min', { n: Math.floor(seconds / 60) })
+  if (seconds < 86_400) return t('ago_hour', { n: Math.floor(seconds / 3600) })
+  return t('ago_day', { n: Math.floor(seconds / 86_400) })
+}
+
+/**
+ * The archived sessions behind the `/unarchive` picker, freshest first and
+ * filtered by title or id when the command named something.
+ */
+function archivedRows(deps: CommandDeps, query: string): ArchivedRow[] {
+  const state = deps.state
+  return state.entries()
+    .filter(([, mapping]) => mapping.archived === true)
+    .filter(([id, mapping]) => query.length === 0
+      || (mapping.title ?? '').toLowerCase().includes(query)
+      || id.toLowerCase().includes(query))
+    .sort(([, a], [, b]) => (b.lastIdle ?? 0) - (a.lastIdle ?? 0))
+    .map(([id, mapping]) => ({
+      id,
+      title: (mapping.title ?? id.slice(0, 18)).slice(0, 40),
+      ago: mapping.lastIdle === undefined ? '' : fmtAgo(mapping.lastIdle),
+    }))
+}
+
+/**
+ * The project picker behind `/new <title>`: one button per recent workspace
+ * (the configured workspace always first). A single choice skips the card:
+ * the session is created and named on the spot.
+ */
+async function newSessionPicker(
+  deps: CommandDeps,
+  session: string | undefined,
+  title: string,
+): Promise<string | undefined> {
+  const registry = deps.ctx.get('workspaceRegistry') as WorkspaceRegistryLike | undefined
+  const workspace = resolve(deps.workspaceDir())
+  const paths = registry === undefined ? [workspace]
+    : [workspace, ...registry.list()
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .slice(0, 9)
+      .map((entry) => entry.path)]
+  if (paths.length === 1) {
+    try {
+      const sessionId = await deps.createSession(workspace)
+      deps.state.setTitle(sessionId, title.slice(0, 60))
+      void deps.ensureThread(sessionId)
+      return t('new_done', { id: sessionId, dir: escapeHtml(shortPath(workspace, 46)) })
+    } catch (error) {
+      return t('new_fail', { detail: escapeHtml(safe(error)) })
+    }
+  }
+  const buttons = paths.map((path, index) => ({
+    text: `＋ ${basename(path)}`.slice(0, 60),
+    callback: `n:${index}`,
+  }))
+  await deps.sendCard(session, `${t('new_pick', { title: escapeHtml(title.slice(0, 60)) })}`, {
+    kind: 'newsession',
+    buttons,
+    paths,
+    title,
+  })
+  return undefined
 }
 
 /** One run's receipt: exit code, sandbox denial, and the output tail. */
@@ -301,17 +375,25 @@ export async function handleCommand(
 
     case 'new': {
       const raw = args.trim()
-      const cwd = raw.length > 0 ? resolve(raw) : resolve(deps.workspaceDir())
-      if (!isAbsolute(cwd)) {
-        return t('new_usage', { workspace: escapeHtml(shortPath(deps.workspaceDir(), 40)) })
+      // An absolute path keeps the direct semantics: the session is created
+      // in that folder at once, exactly as before.
+      if (raw.length > 0 && isAbsolute(raw)) {
+        try {
+          const cwd = resolve(raw)
+          const sessionId = await deps.createSession(cwd)
+          void deps.ensureThread(sessionId)
+          return t('new_done', { id: sessionId, dir: escapeHtml(shortPath(cwd, 46)) })
+        } catch (error) {
+          return t('new_fail', { detail: escapeHtml(safe(error)) })
+        }
       }
-      try {
-        const sessionId = await deps.createSession(cwd)
-        void deps.ensureThread(sessionId)
-        return t('new_done', { id: sessionId, dir: escapeHtml(shortPath(cwd, 46)) })
-      } catch (error) {
-        return t('new_fail', { detail: escapeHtml(safe(error)) })
+      // No argument at all: the next message in this scope names the session.
+      if (raw.length === 0) {
+        deps.armTitleAsk()
+        return t('new_ask_title', { workspace: escapeHtml(shortPath(deps.workspaceDir(), 40)) })
       }
+      // Anything else is the session's title: pick the folder next.
+      return newSessionPicker(deps, targetSession, raw)
     }
 
     case 'rebuild': {
@@ -801,11 +883,65 @@ export async function handleCommand(
     }
 
     case 'unarchive': {
-      const id = args.trim().length > 0 ? state.sessionByPrefix(args.trim()) : targetSession
-      if (id === undefined) return t('archive_usage')
-      state.setArchived(id, false)
-      await deps.ensureThread(id)
-      return t('unarchive_recreated')
+      const raw = args.trim()
+      // An id or prefix resolves and wakes the session directly.
+      if (raw.length > 0) {
+        const id = state.sessionByPrefix(raw)
+        if (id !== undefined) {
+          state.setArchived(id, false)
+          await deps.ensureThread(id)
+          return t('unarchive_recreated')
+        }
+      } else if (targetSession !== undefined && state.isArchived(targetSession)) {
+        state.setArchived(targetSession, false)
+        await deps.ensureThread(targetSession)
+        return t('unarchive_recreated')
+      }
+      // Nothing resolved: the picker of the archived, filtered when asked.
+      const rows = archivedRows(deps, raw.toLowerCase())
+      if (rows.length === 0) return t('unarchive_none')
+      const rendered = renderUnarchive(rows, 0)
+      await deps.sendCard(targetSession, `${t('unarchive_pick')}${rendered.text}`, rendered.payload)
+      return undefined
+    }
+
+    case 'log': {
+      const id = targetSession
+      if (id === undefined) return t('msg_no_target')
+      const sessionQuery = ctx.get('sessionQuery') as SessionQueryLike | undefined
+      if (sessionQuery === undefined) return t('log_unavailable')
+      try {
+        const snapshot = await sessionQuery.readSession(brandString<SessionId>(id))
+        const events = [...snapshot.events].slice(-10)
+        if (events.length === 0) return t('log_none')
+        const lines = events.map((event) => {
+          const record = event as { seq?: number, type?: string }
+          return t('log_entry', { seq: record.seq ?? '?', type: escapeHtml(record.type ?? '?') })
+        })
+        return `${t('log_header', { n: events.length })}${lines.join('')}`
+      } catch (error) {
+        return t('log_fail', { detail: escapeHtml(safe(error).slice(0, 160)) })
+      }
+    }
+
+    case 'ci': {
+      const raw = args.trim()
+      const repo = deps.config.ci?.repo ?? DEFAULT_REPO
+      // A bare number is the run count; anything else filters by workflow.
+      const count = Math.min(Math.max(Number(raw) || 6, 1), 30)
+      const filter = raw.length > 0 && Number.isNaN(Number(raw)) ? raw.toLowerCase() : undefined
+      try {
+        const runs = await fetchRuns(repo, count, process.env.GITHUB_TOKEN)
+        const shown = filter !== undefined
+          ? runs.filter((run) => run.name.toLowerCase().includes(filter))
+          : runs
+        if (shown.length === 0 && filter !== undefined) {
+          return t('ci_no_match', { filter: escapeHtml(raw) })
+        }
+        return formatRuns(shown, repo)
+      } catch (error) {
+        return t('ci_fail', { detail: escapeHtml(safe(error).slice(0, 160)) })
+      }
     }
 
     case 'kill': {
@@ -1438,7 +1574,8 @@ export async function handleCommand(
 
 /** Commands a menu button may run; any other `c:` payload falls through. */
 const MENU_COMMANDS = new Set([
-  'running', 'sessions', 'projects', 'models', 'usage', 'context', 'skills', 'tasks', 'queue', 'help',
+  'running', 'sessions', 'projects', 'models', 'usage', 'context', 'skills', 'tasks', 'queue',
+  'dashboard', 'log', 'ci', 'help',
 ])
 
 /** The largest file a `/files` tap downloads as a document, in bytes. */
@@ -1716,6 +1853,68 @@ export async function handleCardCallback(
       await answer(t('files_sent', { name: entry.name.slice(0, 60) }))
     } catch (error) {
       await answer(t('files_fail', { detail: safe(error).slice(0, 160) }), true)
+    }
+    return true
+  }
+
+  if (payload.startsWith('u:') || payload.startsWith('ua:')) {
+    if (card.kind !== 'unarchive') return false
+    // Page navigation: redraw with the live rows, keeping the card's query.
+    if (payload.startsWith('ua:')) {
+      const page = Number(payload.slice(3))
+      if (!Number.isInteger(page) || page < 0 || page === card.page) {
+        await answer(t('form_inactive'))
+        return true
+      }
+      const rows = archivedRows(deps, card.query)
+      const total = Math.max(1, Math.ceil(rows.length / UNARCHIVE_PAGE))
+      if (page >= total) {
+        await answer(t('form_inactive'))
+        return true
+      }
+      const rendered = renderUnarchive(rows, page)
+      await answer()
+      if (messageId !== undefined) {
+        await deps.rebindCard(messageId, `${t('unarchive_pick')}${rendered.text}`, rendered.payload)
+      }
+      return true
+    }
+    const index = Number(payload.slice(2))
+    const id = Number.isInteger(index) ? card.candidates[index] : undefined
+    if (id === undefined) {
+      await answer(t('form_inactive'))
+      return true
+    }
+    await answer()
+    deps.state.setArchived(id, false)
+    void deps.ensureThread(id)
+    if (messageId !== undefined) {
+      await deps.rebindCard(messageId, t('unarchive_recreated'), card)
+    }
+    return true
+  }
+
+  if (payload.startsWith('n:')) {
+    if (card.kind !== 'newsession') return false
+    const index = Number(payload.slice(2))
+    const path = Number.isInteger(index) ? card.paths[index] : undefined
+    if (path === undefined) {
+      await answer(t('form_inactive'))
+      return true
+    }
+    await answer()
+    try {
+      const sessionId = await deps.createSession(path)
+      // The title pins before the thread exists, so the topic is born named.
+      deps.state.setTitle(sessionId, card.title.slice(0, 60))
+      void deps.ensureThread(sessionId)
+      if (messageId !== undefined) {
+        await deps.rebindCard(messageId, t('new_done', { id: sessionId, dir: escapeHtml(shortPath(path, 46)) }), card)
+      }
+    } catch (error) {
+      if (messageId !== undefined) {
+        await deps.rebindCard(messageId, t('new_fail', { detail: escapeHtml(safe(error).slice(0, 160)) }), card)
+      }
     }
     return true
   }

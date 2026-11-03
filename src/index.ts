@@ -1071,6 +1071,7 @@ export function apply(ctx: Context, config: Config): void {
     dashboardFacts,
     isSessionRunning: (sessionId) => liveStatus.get(sessionId) === 'running',
     armInboxReplace: (sessionId, messageId) => { armedReplace.set(sessionId, messageId as UserMessage['id']) },
+    armTitleAsk: () => { titleAsk = { threadId: askScope, at: Date.now() } },
     bridgeStatus: () => ({
       mode: config.mode,
       leading,
@@ -1088,6 +1089,14 @@ export function apply(ctx: Context, config: Config): void {
    * replaces that pending inbox item instead of queuing a new prompt.
    */
   const armedReplace = new Map<string, UserMessage['id']>()
+
+  /**
+   * Armed by `/new` without a title: the next message in the same scope
+   * (thread or root) names the freshly created session.
+   */
+  let titleAsk: { threadId: number | undefined, at: number } | undefined
+  /** The thread (or root) the last command ran in — the ask's scope. */
+  let askScope: number | undefined
 
   const replyLabels: ReplyLabels = {
     media_poll: (params) => t('media_poll', params),
@@ -1140,10 +1149,25 @@ export function apply(ctx: Context, config: Config): void {
       if (text.length === 0) return
 
       if (text.startsWith('/')) {
+        askScope = message.message_thread_id
         const [command, ...rest] = text.slice(1).split(/\s+/)
         const name = (command ?? '').split('@')[0] ?? ''
         try {
           const reply = await handleCommand(commandDeps, name, rest.join(' '), target)
+          if (reply !== undefined) await send(target, reply)
+        } catch (error) {
+          await send(target, t('err_generic', { detail: safe(error).slice(0, 200) }))
+        }
+        return
+      }
+
+      // An armed `/new` ask consumes the message: it names the session.
+      if (titleAsk !== undefined
+        && (message.message_thread_id ?? undefined) === titleAsk.threadId
+        && Date.now() - titleAsk.at < 600_000) {
+        titleAsk = undefined
+        try {
+          const reply = await handleCommand(commandDeps, 'new', text, target)
           if (reply !== undefined) await send(target, reply)
         } catch (error) {
           await send(target, t('err_generic', { detail: safe(error).slice(0, 200) }))
@@ -1240,6 +1264,8 @@ export function apply(ctx: Context, config: Config): void {
       { command: 'context', description: 'Context occupancy' },
       { command: 'queue', description: 'Session inbox' },
       { command: 'dashboard', description: 'Pin a live panel' },
+      { command: 'log', description: 'Session log tail' },
+      { command: 'ci', description: 'Latest CI runs' },
       { command: 'clearqueue', description: 'Empty the inbox' },
       { command: 'commands', description: 'Harness commands' },
       { command: 'config', description: 'Config facts; default model' },
