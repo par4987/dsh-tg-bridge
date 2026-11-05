@@ -26,6 +26,7 @@ import type { Context } from '@deepseek-ai/cordis'
 // Side-effect type imports: declaration-merge the waterfalls answered below
 // and the default-model service the bridge reads.
 import type {} from '@deepseek-ai/dsh-agent-default-model'
+import type {} from '@deepseek-ai/dsh-session-title'
 import type {} from '@deepseek-ai/dsh-user-approval'
 import type {} from '@deepseek-ai/dsh-user-questions'
 import { brandString } from '@deepseek-ai/dsh-brand'
@@ -278,6 +279,30 @@ export function apply(ctx: Context, config: Config): void {
   // ── topics ──────────────────────────────────────────────────────────────────
 
   const pendingTopics = new Set<string>()
+  /** Session ids whose durable title was already probed at topic creation. */
+  const probedTitles = new Set<string>()
+
+  /**
+   * Read the durable title once, for a session the bridge never learned one
+   * from: a restart mid-session leaves the event already behind in the log,
+   * so `session/title` never fires again and the thread would be born
+   * untitled. The probe runs only while a topic is missing.
+   */
+  async function probeDurableTitle(sessionId: string): Promise<void> {
+    if (probedTitles.has(sessionId) || (state.titleOf(sessionId) ?? '').length > 0) return
+    probedTitles.add(sessionId)
+    const sessionQuery = ctx.get('sessionQuery') as
+      | { readTitle(id: SessionId, signal?: AbortSignal): Promise<{ title: string } | undefined> }
+      | undefined
+    try {
+      const snapshot = await sessionQuery?.readTitle(brandString<SessionId>(sessionId))
+      if (snapshot !== undefined && snapshot.title.trim().length > 0) {
+        state.setTitle(sessionId, snapshot.title.trim().slice(0, 60))
+      }
+    } catch {
+      /* an unreadable title keeps the fallback name; the probe does not repeat */
+    }
+  }
 
   /** Create (or reuse) the forum thread for a session. */
   async function ensureThread(sessionId: string): Promise<number | undefined> {
@@ -286,6 +311,7 @@ export function apply(ctx: Context, config: Config): void {
     if (pendingTopics.has(sessionId)) return undefined
     pendingTopics.add(sessionId)
     try {
+      await probeDurableTitle(sessionId)
       const title = titleOf(sessionId)
       const threadId = await telegram.createForumTopic(chatId, title)
       if (threadId !== undefined) state.setThread(sessionId, threadId)
@@ -433,6 +459,19 @@ export function apply(ctx: Context, config: Config): void {
       case 'turn/start': {
         turnStart.set(id, Date.now())
         turnPaths.set(id, new Set<string>())
+        break
+      }
+      case 'session/title': {
+        // A rename from any surface — the Desktop/Web UI, this bridge's own
+        // `/rename`, or the title provider's derivation. The thread follows
+        // it, whatever named it first.
+        const title = event.data.title.trim()
+        if (title.length === 0) break
+        state.setTitle(id, title.slice(0, 60))
+        const thread = state.threadOf(id)
+        if (thread !== undefined) {
+          void telegram.editForumTopic(chatId, thread, title.slice(0, 60)).catch((error) => log('warn', 'topic rename', error))
+        }
         break
       }
       case 'user/message': {

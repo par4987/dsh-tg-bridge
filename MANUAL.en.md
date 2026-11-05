@@ -81,7 +81,7 @@ Sessions with a turn in flight in this process.
 The session's durable log as a `.jsonl` document (raw events, exported through `sessionQuery.readSession`).
 
 ### `/rename [title]`
-With a title, pins it through the official `session/title` event with a `user` source — the Web sees it too, and automatic title generation stops rescheduling. The Telegram thread renames with it. **With no argument, it regenerates**: calls the harness's `sessionTitle.refresh`, which unpins the current title and derives a new one (the honest counterpart of opencode's three suggestions — here the service gives you one, the right one).
+With a title, pins it through the official `session/title` event with a `user` source — the Web sees it too, and automatic title generation stops rescheduling. The Telegram thread renames with it, and **it follows any rename** — from the app, the Web, or the harness's own derivation: the `session/title` event reaches this bridge and the thread wears what the session wears. **With no argument, it regenerates**: calls the harness's `sessionTitle.refresh`, which unpins the current title and derives a new one (the honest counterpart of opencode's three suggestions — here the service gives you one, the right one).
 
 ### `/instructions [add <text> | clear]`
 The folder's notes: reads, appends to, or empties `AGENTS.local.md` in the session's cwd — the file the harness re-injects as local instruction for every session in that folder. A semantic shift from opencode (a per-session key/value store): here it is one markdown file shared by the whole project, and every `add` says so.

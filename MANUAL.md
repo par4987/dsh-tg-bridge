@@ -79,7 +79,7 @@ Las sesiones con un turno en curso en este proceso.
 El log durable de la sesión como documento `.jsonl` (los eventos crudos, exportados por `sessionQuery.readSession`).
 
 ### `/rename [título]`
-Con título, fija el título vía el evento oficial `session/title` con origen `user` — lo ve la Web también, y la generación automática deja de re-programarse. El hilo de Telegram se renombra igual. **Sin argumento, regenera**: llama al `sessionTitle.refresh` del harness, que despina el título actual y deriva uno nuevo (el análogo honesto de las tres sugerencias del opencode — acá el servicio da una, la buena).
+Con título, fija el título vía el evento oficial `session/title` con origen `user` — lo ve la Web también, y la generación automática deja de re-programarse. El hilo de Telegram se renombra igual, y **sigue cualquier renombrado** — desde la app, la Web, o la derivación automática del harness: el evento `session/title` llega acá y el hilo se llama como la sesión. **Sin argumento, regenera**: llama al `sessionTitle.refresh` del harness, que despina el título actual y deriva uno nuevo (el análogo honesto de las tres sugerencias del opencode — acá el servicio da una, la buena).
 
 ### `/instructions [add <texto> | clear]`
 Las notas de la carpeta: lee, agrega o vacía `AGENTS.local.md` en el cwd de la sesión — el archivo que el harness re-inyecta como instrucción local en cada sesión de esa carpeta. Cambio semántico frente al opencode (que era un store por sesión con claves): acá es un archivo markdown compartido por todo el proyecto, y el bot lo avisa en cada `add`.
